@@ -395,25 +395,92 @@ class SubscriptionController extends Controller
      */
     public function createPlan(Request $request)
     {
-        $user = $request->user();
-        
-        if (!$user->isSuperAdmin()) {
-            return response()->json(['message' => 'Unauthorized'], 403);
+        try {
+            $user = $request->user();
+            
+            if (!$user->isSuperAdmin()) {
+                return response()->json(['message' => 'Unauthorized'], 403);
+            }
+
+            // Preprocess request data
+            $requestData = $request->all();
+            
+            // Convert amount to integer if it's a float or string
+            if (isset($requestData['amount'])) {
+                $requestData['amount'] = (int) $requestData['amount'];
+            }
+            
+            // Ensure currency is exactly 3 characters (preserve case)
+            if (isset($requestData['currency'])) {
+                $requestData['currency'] = substr(strtoupper($requestData['currency']), 0, 3);
+            }
+            
+            // Preprocess boolean values
+            if (isset($requestData['is_active'])) {
+                if (is_string($requestData['is_active'])) {
+                    $requestData['is_active'] = filter_var($requestData['is_active'], FILTER_VALIDATE_BOOLEAN);
+                } elseif (!is_bool($requestData['is_active'])) {
+                    $requestData['is_active'] = (bool) $requestData['is_active'];
+                }
+            }
+            
+            // Handle features - convert empty array to null, ensure it's a valid array
+            if (isset($requestData['features'])) {
+                if (is_string($requestData['features'])) {
+                    // Try to decode if it's a JSON string
+                    $decoded = json_decode($requestData['features'], true);
+                    $requestData['features'] = is_array($decoded) ? $decoded : null;
+                } elseif (is_array($requestData['features']) && empty($requestData['features'])) {
+                    $requestData['features'] = null;
+                } elseif (!is_array($requestData['features'])) {
+                    $requestData['features'] = null;
+                }
+            }
+            
+            $request->merge($requestData);
+
+            $validated = $request->validate([
+                'name' => 'required|string|max:255',
+                'description' => 'nullable|string',
+                'amount' => 'required|integer|min:0',
+                'currency' => 'required|string|size:3',
+                'interval' => 'required|in:month,year',
+                'features' => 'nullable|array',
+                'is_active' => 'nullable|boolean',
+            ]);
+
+            // Ensure is_active has a default value
+            if (!isset($validated['is_active'])) {
+                $validated['is_active'] = true;
+            }
+            
+            // Ensure features is null if empty array
+            if (isset($validated['features']) && is_array($validated['features']) && empty($validated['features'])) {
+                $validated['features'] = null;
+            }
+
+            $plan = SubscriptionPlan::create($validated);
+
+            return response()->json($plan, 201);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            Log::error('Subscription plan validation failed', [
+                'errors' => $e->errors(),
+                'request_data' => $request->all(),
+            ]);
+            return response()->json([
+                'message' => 'Validation failed',
+                'errors' => $e->errors(),
+            ], 422);
+        } catch (\Exception $e) {
+            Log::error('Failed to create subscription plan', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'request_data' => $request->all(),
+            ]);
+            return response()->json([
+                'message' => 'Failed to create subscription plan: ' . $e->getMessage(),
+            ], 500);
         }
-
-        $validated = $request->validate([
-            'name' => 'required|string|max:255',
-            'description' => 'nullable|string',
-            'amount' => 'required|integer|min:0',
-            'currency' => 'required|string|size:3',
-            'interval' => 'required|in:month,year',
-            'features' => 'nullable|array',
-            'is_active' => 'boolean',
-        ]);
-
-        $plan = SubscriptionPlan::create($validated);
-
-        return response()->json($plan, 201);
     }
 
     /**
