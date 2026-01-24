@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\Traits\HandlesApiErrors;
 use App\Models\Company;
 use App\Models\Subscription;
 use App\Models\SubscriptionPlan;
@@ -14,6 +15,7 @@ use Stripe\Webhook;
 
 class SubscriptionController extends Controller
 {
+    use HandlesApiErrors;
     public function __construct(
         private StripeService $stripeService
     ) {}
@@ -218,17 +220,12 @@ class SubscriptionController extends Controller
             ]);
 
         } catch (\Exception $e) {
-            Log::error('Failed to activate subscription', [
-                'company_id' => $companyId ?? null,
-                'session_id' => $request->session_id,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-
-            return response()->json([
-                'message' => 'Failed to activate subscription',
-                'error' => config('app.debug') ? $e->getMessage() : 'Internal server error',
-            ], 500);
+            return $this->errorResponse(
+                'Failed to activate subscription',
+                $e,
+                500,
+                ['company_id' => $companyId ?? null, 'session_id' => $request->session_id]
+            );
         }
     }
 
@@ -312,15 +309,12 @@ class SubscriptionController extends Controller
                 'message' => 'Payment completed. Processing subscription...',
             ]);
         } catch (\Exception $e) {
-            Log::error('Failed to retrieve checkout session', [
-                'session_id' => $sessionId,
-                'error' => $e->getMessage(),
-            ]);
-
-            return response()->json([
-                'message' => 'Failed to verify checkout session',
-                'error' => config('app.debug') ? $e->getMessage() : 'Internal server error',
-            ], 500);
+            return $this->errorResponse(
+                'Failed to verify checkout session',
+                $e,
+                500,
+                ['session_id' => $sessionId]
+            );
         }
     }
 
@@ -351,11 +345,17 @@ class SubscriptionController extends Controller
         try {
             $event = Webhook::constructEvent($payload, $sigHeader, $webhookSecret);
         } catch (\UnexpectedValueException $e) {
-            Log::error('Invalid Stripe webhook payload', ['error' => $e->getMessage()]);
-            return response()->json(['error' => 'Invalid payload'], 400);
+            return $this->errorResponse(
+                'Invalid Stripe webhook payload',
+                $e,
+                400
+            );
         } catch (SignatureVerificationException $e) {
-            Log::error('Invalid Stripe webhook signature', ['error' => $e->getMessage()]);
-            return response()->json(['error' => 'Invalid signature'], 400);
+            return $this->errorResponse(
+                'Invalid Stripe webhook signature',
+                $e,
+                400
+            );
         }
 
         // Handle the event
@@ -364,13 +364,12 @@ class SubscriptionController extends Controller
             
             return response()->json(['received' => true]);
         } catch (\Exception $e) {
-            Log::error('Error processing webhook', [
-                'event_type' => $event->type,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-
-            return response()->json(['error' => 'Webhook processing failed'], 500);
+            return $this->errorResponse(
+                'Webhook processing failed',
+                $e,
+                500,
+                ['event_type' => $event->type]
+            );
         }
     }
 

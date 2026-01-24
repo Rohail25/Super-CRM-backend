@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\Traits\HandlesApiErrors;
 use App\Models\Customer;
 use App\Models\Opportunity;
 use App\Services\CustomerDeduplicationService;
@@ -11,6 +12,7 @@ use Illuminate\Support\Facades\DB;
 
 class LeadController extends Controller
 {
+    use HandlesApiErrors;
     public function __construct(
         private CustomerDeduplicationService $deduplicationService
     ) {}

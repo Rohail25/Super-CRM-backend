@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\Traits\HandlesApiErrors;
 use App\Models\FollowUp;
 use App\Models\Customer;
 use Illuminate\Http\Request;
@@ -10,6 +11,7 @@ use Illuminate\Support\Facades\DB;
 
 class FollowUpController extends Controller
 {
+    use HandlesApiErrors;
     /**
      * Get follow-ups for a specific lead (customer).
      */

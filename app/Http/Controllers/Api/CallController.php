@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\Traits\HandlesApiErrors;
 use App\Models\Call;
 use App\Models\Customer;
 use App\Models\Opportunity;
@@ -13,6 +14,7 @@ use Illuminate\Validation\Rule;
 
 class CallController extends Controller
 {
+    use HandlesApiErrors;
     /**
      * Get list of calls with filters.
      */
@@ -395,15 +397,12 @@ class CallController extends Controller
                 'call' => $call->fresh()->load(['user', 'customer', 'opportunity']),
             ]);
         } catch (\Exception $e) {
-            Log::error('Failed to initiate call', [
-                'call_id' => $call->id,
-                'error' => $e->getMessage(),
-            ]);
-
-            return response()->json([
-                'message' => 'Failed to initiate call',
-                'error' => config('app.debug') ? $e->getMessage() : 'Internal server error',
-            ], 500);
+            return $this->errorResponse(
+                'Failed to initiate call',
+                $e,
+                500,
+                ['call_id' => $call->id]
+            );
         }
     }
 
@@ -736,14 +735,11 @@ class CallController extends Controller
             ], 200);
 
         } catch (\Exception $e) {
-            Log::error('CSV import failed', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-
-            return response()->json([
-                'message' => 'Import failed: ' . $e->getMessage(),
-            ], 500);
+            return $this->errorResponse(
+                'CSV import failed',
+                $e,
+                500
+            );
         }
     }
 }

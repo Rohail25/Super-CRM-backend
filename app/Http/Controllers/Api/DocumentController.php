@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\Traits\HandlesApiErrors;
 use App\Models\Document;
 use App\Services\ActivityLogService;
 use Illuminate\Http\Request;
@@ -11,6 +12,7 @@ use Illuminate\Support\Str;
 
 class DocumentController extends Controller
 {
+    use HandlesApiErrors;
     protected $activityLogService;
 
     public function __construct(ActivityLogService $activityLogService)

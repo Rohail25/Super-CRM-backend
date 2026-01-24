@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\Traits\HandlesApiErrors;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -10,17 +11,19 @@ use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
+    use HandlesApiErrors;
     /**
      * Handle a login request.
      */
     public function login(Request $request)
     {
-        $request->validate([
-            'email' => 'required|email',
-            'password' => 'required',
-        ]);
+        try {
+            $request->validate([
+                'email' => 'required|email',
+                'password' => 'required',
+            ]);
 
-        $user = User::where('email', $request->email)->first();
+            $user = User::where('email', $request->email)->first();
 
         if (!$user || !Hash::check($request->password, $user->password)) {
             throw ValidationException::withMessages([
@@ -54,12 +57,21 @@ class AuthController extends Controller
             }
         }
 
-        $token = $user->createToken('auth-token')->plainTextToken;
+            $token = $user->createToken('auth-token')->plainTextToken;
 
-        return response()->json([
-            'user' => $user->load('company'),
-            'token' => $token,
-        ]);
+            return response()->json([
+                'user' => $user->load('company'),
+                'token' => $token,
+            ]);
+        } catch (ValidationException $e) {
+            return $this->handleValidationException($e);
+        } catch (\Exception $e) {
+            return $this->errorResponse(
+                'Login failed',
+                $e,
+                500
+            );
+        }
     }
 
     /**

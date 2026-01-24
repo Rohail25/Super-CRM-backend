@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\Traits\HandlesApiErrors;
 use App\Models\CompanyProjectUser;
 use App\Models\Project;
 use Illuminate\Http\Request;
@@ -12,6 +13,7 @@ use Illuminate\Support\Facades\Storage;
 
 class TGCalabriaController extends Controller
 {
+    use HandlesApiErrors;
     private string $baseUrl = 'https://api.tgcalabriareport.com/api/v1';
     private string $loginEndpoint;
     private string $categoriesEndpoint;
@@ -146,16 +148,12 @@ class TGCalabriaController extends Controller
                 ], $response->status());
             }
         } catch (\Exception $e) {
-            Log::error('Exception during TG Calabria login', [
-                'user_id' => $user->id,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Login failed: ' . $e->getMessage(),
-            ], 500);
+            return $this->errorResponse(
+                'Failed to login to TG Calabria',
+                $e,
+                500,
+                ['user_id' => $user->id, 'project_id' => $projectId]
+            );
         }
     }
 
@@ -226,15 +224,12 @@ class TGCalabriaController extends Controller
                 ], $response->status());
             }
         } catch (\Exception $e) {
-            Log::error('Exception during TG Calabria categories fetch', [
-                'user_id' => $user->id,
-                'error' => $e->getMessage(),
-            ]);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to fetch categories: ' . $e->getMessage(),
-            ], 500);
+            return $this->errorResponse(
+                'Failed to fetch TG Calabria categories',
+                $e,
+                500,
+                ['user_id' => $user->id, 'project_id' => $projectId]
+            );
         }
     }
 
@@ -387,15 +382,12 @@ class TGCalabriaController extends Controller
                 ], $response->status());
             }
         } catch (\Exception $e) {
-            Log::error('Exception during TG Calabria article creation', [
-                'user_id' => $user->id,
-                'error' => $e->getMessage(),
-            ]);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to create article: ' . $e->getMessage(),
-            ], 500);
+            return $this->errorResponse(
+                'Failed to create TG Calabria article',
+                $e,
+                500,
+                ['user_id' => $user->id, 'project_id' => $projectId]
+            );
         }
     }
 
@@ -476,15 +468,12 @@ class TGCalabriaController extends Controller
                 ], $response->status());
             }
         } catch (\Exception $e) {
-            Log::error('Exception during TG Calabria news stats fetch', [
-                'user_id' => $user->id,
-                'error' => $e->getMessage(),
-            ]);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to fetch news statistics: ' . $e->getMessage(),
-            ], 500);
+            return $this->errorResponse(
+                'Failed to fetch TG Calabria news stats',
+                $e,
+                500,
+                ['user_id' => $user->id, 'project_id' => $projectId]
+            );
         }
     }
 }

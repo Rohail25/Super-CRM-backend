@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\Traits\HandlesApiErrors;
 use App\Models\CompanyProjectAccess;
 use App\Models\Project;
 use App\Services\RateLimitService;
@@ -11,6 +12,7 @@ use Illuminate\Http\Request;
 
 class ProjectController extends Controller
 {
+    use HandlesApiErrors;
     public function __construct(
         private SSOService $ssoService,
         private RateLimitService $rateLimitService
@@ -263,15 +265,12 @@ class ProjectController extends Controller
                     ], 400);
                 }
             } catch (\Exception $e) {
-                \Illuminate\Support\Facades\Log::error('Failed to login to doctor project', [
-                    'user_id' => $user->id,
-                    'project_id' => $project->id,
-                    'error' => $e->getMessage(),
-                ]);
-                
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Failed to access doctor project: ' . $e->getMessage(),
+                return $this->errorResponse(
+                    'Failed to login to doctor project',
+                    $e,
+                    500,
+                    ['user_id' => $user->id, 'project_id' => $project->id]
+                );
                 ], 500);
             }
         }

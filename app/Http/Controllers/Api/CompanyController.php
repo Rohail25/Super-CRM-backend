@@ -3,11 +3,13 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\Traits\HandlesApiErrors;
 use App\Models\Company;
 use Illuminate\Http\Request;
 
 class CompanyController extends Controller
 {
+    use HandlesApiErrors;
     /**
      * Display a listing of companies.
      */
@@ -288,15 +290,12 @@ class CompanyController extends Controller
                         'result' => $registrationResult,
                     ]);
                 } catch (\Exception $e) {
-                    \Illuminate\Support\Facades\Log::error('Failed to register users to doctor project', [
-                        'access_id' => $existingAccess->id,
-                        'project_id' => $project->id,
-                        'error' => $e->getMessage(),
-                        'trace' => $e->getTraceAsString(),
-                    ]);
-                    
                     $registrationResult = [
                         'success' => false,
+                        'error' => [
+                            'message' => $e->getMessage(),
+                            'type' => get_class($e),
+                        ],
                         'message' => 'Registration failed: ' . $e->getMessage(),
                     ];
                 }
@@ -326,12 +325,12 @@ class CompanyController extends Controller
                         'result' => $registrationResult,
                     ]);
                 } catch (\Exception $e) {
-                    \Illuminate\Support\Facades\Log::error('Failed to register users to TG Calabria project', [
-                        'access_id' => $existingAccess->id,
-                        'project_id' => $project->id,
-                        'error' => $e->getMessage(),
-                        'trace' => $e->getTraceAsString(),
-                    ]);
+                    return $this->errorResponse(
+                        'Failed to register users to TG Calabria project',
+                        $e,
+                        500,
+                        ['access_id' => $existingAccess->id, 'project_id' => $project->id]
+                    );
                     
                     $registrationResult = [
                         'success' => false,
@@ -405,12 +404,12 @@ class CompanyController extends Controller
                     'result' => $registrationResult,
                 ]);
             } catch (\Exception $e) {
-                \Illuminate\Support\Facades\Log::error('Failed to register users to doctor project', [
-                    'access_id' => $access->id,
-                    'project_id' => $project->id,
-                    'error' => $e->getMessage(),
-                    'trace' => $e->getTraceAsString(),
-                ]);
+                return $this->errorResponse(
+                    'Failed to register users to doctor project',
+                    $e,
+                    500,
+                    ['access_id' => $access->id, 'project_id' => $project->id]
+                );
                 
                 $registrationResult = [
                     'success' => false,
@@ -442,12 +441,12 @@ class CompanyController extends Controller
                     'result' => $registrationResult,
                 ]);
             } catch (\Exception $e) {
-                \Illuminate\Support\Facades\Log::error('Failed to register users to TG Calabria project', [
-                    'access_id' => $access->id,
-                    'project_id' => $project->id,
-                    'error' => $e->getMessage(),
-                    'trace' => $e->getTraceAsString(),
-                ]);
+                return $this->errorResponse(
+                    'Failed to register users to TG Calabria project',
+                    $e,
+                    500,
+                    ['access_id' => $access->id, 'project_id' => $project->id]
+                );
                 
                 $registrationResult = [
                     'success' => false,
@@ -616,13 +615,12 @@ class CompanyController extends Controller
                 'results' => $result['results'] ?? null,
             ]);
         } catch (\Exception $e) {
-            \Illuminate\Support\Facades\Log::error('Failed to register users', [
-                'access_id' => $access->id,
-                'error' => $e->getMessage(),
-            ]);
-
-            return response()->json([
-                'success' => false,
+            return $this->errorResponse(
+                'Failed to register users',
+                $e,
+                500,
+                ['access_id' => $access->id]
+            );
                 'message' => 'Registration failed: ' . $e->getMessage(),
             ], 500);
         }

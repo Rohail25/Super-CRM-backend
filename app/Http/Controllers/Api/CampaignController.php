@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\Traits\HandlesApiErrors;
 use App\Models\Campaign;
 use App\Services\ActivityLogService;
 use App\Services\StripeService;
@@ -15,6 +16,8 @@ use Illuminate\Support\Facades\Http;
 
 class CampaignController extends Controller
 {
+    use HandlesApiErrors;
+
     protected $activityLogService;
     protected $stripeService;
 
@@ -168,13 +171,30 @@ class CampaignController extends Controller
         // Always set status to 'draft' (pending) when creating - admin will approve later
         $validated['status'] = 'draft';
 
-        $campaign = DB::transaction(function () use ($validated) {
-            $campaign = Campaign::create($validated);
-            $this->activityLogService->logCreated($campaign);
-            return $campaign;
-        });
+        try {
+            $campaign = DB::transaction(function () use ($validated) {
+                $campaign = Campaign::create($validated);
+                $this->activityLogService->logCreated($campaign);
+                return $campaign;
+            });
 
-        return response()->json($campaign->load(['creator', 'project']), 201);
+            return response()->json($campaign->load(['creator', 'project']), 201);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return $this->handleValidationException($e);
+        } catch (\Exception $e) {
+            // Check for database exceptions first
+            $dbError = $this->handleDatabaseException($e);
+            if ($dbError) {
+                return $dbError;
+            }
+
+            return $this->errorResponse(
+                'Failed to create campaign',
+                $e,
+                500,
+                ['user_id' => $user->id, 'company_id' => $user->company_id]
+            );
+        }
     }
 
     public function show(Campaign $campaign)
@@ -387,27 +407,29 @@ class CampaignController extends Controller
                 'checkout_url' => $result['checkout_url'],
             ]);
         } catch (\InvalidArgumentException $e) {
-            return response()->json([
-                'message' => $e->getMessage(),
-            ], 400);
+            return $this->errorResponse(
+                'Invalid request: ' . $e->getMessage(),
+                $e,
+                400,
+                ['campaign_id' => $campaign->id]
+            );
         } catch (\Stripe\Exception\ApiErrorException $e) {
-            \Log::error('Stripe API error in campaign payment', [
-                'campaign_id' => $campaign->id,
-                'error' => $e->getMessage(),
-                'stripe_code' => $e->getStripeCode(),
-            ]);
-            return response()->json([
-                'message' => 'Payment processing error: ' . $e->getMessage(),
-            ], 500);
+            return $this->errorResponse(
+                'Payment processing error',
+                $e,
+                500,
+                [
+                    'campaign_id' => $campaign->id,
+                    'stripe_code' => $e->getStripeCode(),
+                ]
+            );
         } catch (\Exception $e) {
-            \Log::error('Failed to create payment checkout', [
-                'campaign_id' => $campaign->id,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-            return response()->json([
-                'message' => 'Failed to create payment checkout: ' . $e->getMessage(),
-            ], 500);
+            return $this->errorResponse(
+                'Failed to create payment checkout',
+                $e,
+                500,
+                ['campaign_id' => $campaign->id]
+            );
         }
     }
 
@@ -429,6 +451,12 @@ class CampaignController extends Controller
             if ($session->metadata->campaign_id != $campaign->id) {
                 return response()->json([
                     'message' => 'Invalid payment session',
+                    'error' => [
+                        'message' => 'The payment session does not match the campaign.',
+                        'type' => 'PaymentSessionMismatch',
+                        'session_campaign_id' => $session->metadata->campaign_id ?? null,
+                        'requested_campaign_id' => $campaign->id,
+                    ],
                 ], 400);
             }
 
@@ -454,9 +482,12 @@ class CampaignController extends Controller
                 ]);
             }
         } catch (\Exception $e) {
-            return response()->json([
-                'message' => 'Failed to process payment: ' . $e->getMessage(),
-            ], 500);
+            return $this->errorResponse(
+                'Failed to process payment',
+                $e,
+                500,
+                ['campaign_id' => $request->campaign_id, 'session_id' => $request->session_id]
+            );
         }
     }
 
@@ -629,14 +660,12 @@ class CampaignController extends Controller
                 'ad_response' => $adResponse->json(),
             ]);
         } catch (\Exception $e) {
-            Log::error('Failed to activate campaign', [
-                'campaign_id' => $campaign->id,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-            return response()->json([
-                'message' => 'Failed to activate campaign: ' . $e->getMessage(),
-            ], 500);
+            return $this->errorResponse(
+                'Failed to activate campaign',
+                $e,
+                500,
+                ['campaign_id' => $campaign->id]
+            );
         }
     }
 }

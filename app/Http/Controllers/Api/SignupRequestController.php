@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\Traits\HandlesApiErrors;
 use App\Models\SignupRequest;
 use App\Services\SignupApprovalService;
 use Illuminate\Http\Request;
@@ -11,6 +12,7 @@ use Illuminate\Support\Facades\Log;
 
 class SignupRequestController extends Controller
 {
+    use HandlesApiErrors;
     public function __construct(
         private SignupApprovalService $approvalService
     ) {}
@@ -115,26 +117,28 @@ class SignupRequestController extends Controller
             }
             
             // Generic database error
-            Log::error('Signup request creation failed', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
+            $dbError = $this->handleDatabaseException($e);
+            if ($dbError) {
+                return $dbError;
+            }
             
-            return response()->json([
-                'message' => 'Registration failed due to a database error. Please try again or contact support if the problem persists.',
-                'error' => config('app.debug') ? $e->getMessage() : 'Internal server error'
-            ], 500);
+            return $this->errorResponse(
+                'Registration failed due to a database error. Please try again or contact support if the problem persists.',
+                $e,
+                500
+            );
         } catch (\Exception $e) {
             // Handle any other exceptions
-            Log::error('Signup request creation failed', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
+            $dbError = $this->handleDatabaseException($e);
+            if ($dbError) {
+                return $dbError;
+            }
             
-            return response()->json([
-                'message' => 'Registration failed. Please try again or contact support if the problem persists.',
-                'error' => config('app.debug') ? $e->getMessage() : 'An unexpected error occurred'
-            ], 500);
+            return $this->errorResponse(
+                'Registration failed. Please try again or contact support if the problem persists.',
+                $e,
+                500
+            );
         }
     }
 
