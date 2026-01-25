@@ -271,7 +271,40 @@ class ProjectController extends Controller
                     500,
                     ['user_id' => $user->id, 'project_id' => $project->id]
                 );
-                ], 500);
+            }
+        }
+
+        // Special handling for TG Calabria project
+        if ($project->slug === 'tg-calabria') {
+            try {
+                $loginService = app(\App\Services\TGCalabriaLoginService::class);
+                $result = $loginService->loginAndFetchStats($access, $user);
+                
+                if ($result['success']) {
+                    // Fetch categories for the form
+                    $categoriesResult = $loginService->fetchCategories($result['token']);
+                    
+                    return response()->json([
+                        'success' => true,
+                        'project_slug' => 'tg-calabria',
+                        'data' => $result['data'],
+                        'token' => $result['token'],
+                        'categories' => $categoriesResult['data'] ?? [],
+                        'message' => $result['message'] ?? 'Login successful',
+                    ]);
+                } else {
+                    return response()->json([
+                        'success' => false,
+                        'message' => $result['message'] ?? 'Failed to login to TG Calabria project',
+                    ], 400);
+                }
+            } catch (\Exception $e) {
+                return $this->errorResponse(
+                    'Failed to login to TG Calabria project',
+                    $e,
+                    500,
+                    ['user_id' => $user->id, 'project_id' => $project->id]
+                );
             }
         }
 
@@ -286,6 +319,104 @@ class ProjectController extends Controller
         return response()->json([
             'redirect_url' => $redirectUrl,
         ]);
+    }
+
+    /**
+     * Create article for TG Calabria project.
+     */
+    public function createTGCalabriaArticle(Request $request, Project $project)
+    {
+        try {
+            $user = $request->user();
+            
+            // Validate user has access
+            $access = CompanyProjectAccess::where('company_id', $user->company_id)
+                ->where('project_id', $project->id)
+                ->where('status', 'active')
+                ->firstOrFail();
+
+            // Only TG Calabria project
+            if ($project->slug !== 'tg-calabria') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Invalid project',
+                ], 400);
+            }
+
+            // Validate required fields
+            $validated = $request->validate([
+                'title' => 'required|string',
+                'slug' => 'nullable|string',
+                'summary' => 'required|string',
+                'content' => 'required|string',
+                'categoryId' => 'required|string',
+                'isFeatured' => 'boolean',
+                'status' => 'required|in:DRAFT,PUBLISHED',
+                'isBreaking' => 'boolean',
+                'tags' => 'nullable|array',
+                'mainImage' => 'nullable|string',
+            ]);
+
+            // Get token from database
+            $projectUser = CompanyProjectUser::where('company_project_access_id', $access->id)
+                ->where('user_id', $user->id)
+                ->first();
+
+            if (!$projectUser || !$projectUser->external_token) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Authentication token not found. Please refresh the page.',
+                ], 401);
+            }
+
+            // Check token expiration
+            if ($projectUser->token_expires_at && $projectUser->token_expires_at->isPast()) {
+                // Token expired, need to refresh
+                $loginService = app(\App\Services\TGCalabriaLoginService::class);
+                $result = $loginService->loginAndFetchStats($access, $user);
+                
+                if (!$result['success']) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Session expired. Please refresh the page.',
+                    ], 401);
+                }
+                
+                $token = $result['token'];
+            } else {
+                $token = $projectUser->external_token;
+            }
+
+            // Create article via service
+            $loginService = app(\App\Services\TGCalabriaLoginService::class);
+            $result = $loginService->createArticle($token, $validated);
+
+            if ($result['success']) {
+                return response()->json([
+                    'success' => true,
+                    'data' => $result['data'],
+                    'message' => $result['message'] ?? 'Article created successfully',
+                ]);
+            } else {
+                return response()->json([
+                    'success' => false,
+                    'message' => $result['message'] ?? 'Failed to create article',
+                ], 400);
+            }
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation error',
+                'errors' => $e->errors(),
+            ], 422);
+        } catch (\Exception $e) {
+            return $this->errorResponse(
+                'Failed to create article',
+                $e,
+                500,
+                ['user_id' => $request->user()->id ?? 'unknown']
+            );
+        }
     }
 
     /**

@@ -621,8 +621,6 @@ class CompanyController extends Controller
                 500,
                 ['access_id' => $access->id]
             );
-                'message' => 'Registration failed: ' . $e->getMessage(),
-            ], 500);
         }
     }
 }

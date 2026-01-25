@@ -290,6 +290,7 @@ class TGCalabriaController extends Controller
         // Validate request
         $validated = $request->validate([
             'title' => 'required|string|max:500',
+            'slug' => 'nullable|string|max:500',
             'summary' => 'nullable|string|max:1000',
             'content' => 'required|string',
             'categoryId' => 'required|string',
@@ -298,7 +299,7 @@ class TGCalabriaController extends Controller
             'isBreaking' => 'nullable|boolean',
             'tags' => 'nullable|array',
             'tags.*' => 'string|max:100',
-            'mainImage' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:10240', // 10MB max
+            'mainImage' => 'nullable|file|image|mimes:jpeg,png,jpg,gif,webp|max:10240', // 10MB max
         ]);
 
         try {
@@ -329,6 +330,9 @@ class TGCalabriaController extends Controller
                 'status' => $validated['status'] ?? 'PUBLISHED',
             ];
 
+            if (isset($validated['slug'])) {
+                $payload['slug'] = $validated['slug'];
+            }
             if (isset($validated['summary'])) {
                 $payload['summary'] = $validated['summary'];
             }
@@ -394,6 +398,82 @@ class TGCalabriaController extends Controller
     /**
      * Get news statistics for the user.
      */
+    /**
+     * Fetch all news for user.
+     */
+    public function getNews(Request $request, int $projectId)
+    {
+        $user = $request->user();
+
+        // Verify project is TG Calabria
+        $project = Project::findOrFail($projectId);
+        if ($project->slug !== 'tg-calabria') {
+            return response()->json([
+                'message' => 'This endpoint is only for TG Calabria project',
+            ], 400);
+        }
+
+        // Get user's token from company_project_users
+        $projectUser = CompanyProjectUser::where('user_id', $user->id)
+            ->whereHas('companyProjectAccess', function ($query) use ($projectId) {
+                $query->where('project_id', $projectId)
+                    ->where('status', 'active');
+            })
+            ->first();
+
+        if (!$projectUser) {
+            return response()->json([
+                'message' => 'You do not have access to this project',
+            ], 403);
+        }
+
+        if (!$projectUser->external_token) {
+            return response()->json([
+                'message' => 'Please login first to get authentication token',
+            ], 401);
+        }
+
+        try {
+            $response = Http::timeout(30)
+                ->withHeaders([
+                    'Authorization' => 'Bearer ' . $projectUser->external_token,
+                    'Accept' => 'application/json',
+                ])
+                ->get($this->newsEndpoint);
+
+            Log::info('TG Calabria news response', [
+                'user_id' => $user->id,
+                'status_code' => $response->status(),
+            ]);
+
+            if ($response->successful()) {
+                $responseData = $response->json();
+                return response()->json($responseData);
+            } else {
+                $responseBody = $response->json();
+                $errorMessage = $responseBody['message'] ?? 'Failed to fetch news';
+                
+                Log::error('TG Calabria news failed', [
+                    'user_id' => $user->id,
+                    'status_code' => $response->status(),
+                    'error' => $errorMessage,
+                ]);
+
+                return response()->json([
+                    'success' => false,
+                    'message' => $errorMessage,
+                ], $response->status());
+            }
+        } catch (\Exception $e) {
+            return $this->errorResponse(
+                'Failed to fetch TG Calabria news',
+                $e,
+                500,
+                ['user_id' => $user->id, 'project_id' => $projectId]
+            );
+        }
+    }
+
     public function getNewsStats(Request $request, int $projectId)
     {
         $user = $request->user();

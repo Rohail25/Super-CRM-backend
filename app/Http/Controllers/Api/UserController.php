@@ -158,11 +158,17 @@ class UserController extends Controller
             'role' => ['sometimes', Rule::in(['super_admin', 'company_admin', 'manager', 'staff', 'readonly'])],
             'permissions' => 'nullable|array',
             'status' => ['sometimes', Rule::in(['active', 'inactive', 'suspended'])],
+            'company_id' => 'nullable|exists:companies,id',
         ]);
 
         // Super admins can change roles to super_admin, others cannot
         if (isset($validated['role']) && $validated['role'] === 'super_admin' && !$currentUser->isSuperAdmin()) {
             abort(403, 'Only super admins can assign super admin role');
+        }
+
+        // Only super admins can change company_id
+        if (isset($validated['company_id']) && !$currentUser->isSuperAdmin()) {
+            unset($validated['company_id']);
         }
 
         // Prevent users from changing their own role/status (unless super admin)

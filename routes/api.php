@@ -67,8 +67,14 @@ Route::middleware('auth:sanctum')->group(function () {
     // TG Calabria Project
     Route::post('/projects/{projectId}/tg-calabria/login', [\App\Http\Controllers\Api\TGCalabriaController::class, 'login']);
     Route::get('/projects/{projectId}/tg-calabria/categories', [\App\Http\Controllers\Api\TGCalabriaController::class, 'getCategories']);
+    Route::get('/projects/{projectId}/tg-calabria/news', [\App\Http\Controllers\Api\TGCalabriaController::class, 'getNews']);
     Route::get('/projects/{projectId}/tg-calabria/news/stats', [\App\Http\Controllers\Api\TGCalabriaController::class, 'getNewsStats']);
     Route::post('/projects/{projectId}/tg-calabria/news', [\App\Http\Controllers\Api\TGCalabriaController::class, 'createArticle']);
+
+    // Project Management (Super Admin only)
+    Route::apiResource('project-manages', \App\Http\Controllers\Api\ProjectManageController::class);
+    Route::get('/project-manages/project/{projectId}/credentials', [\App\Http\Controllers\Api\ProjectManageController::class, 'getProjectCredentials']);
+    Route::get('/projects/{projectId}/users-credentials', [\App\Http\Controllers\Api\ProjectManageController::class, 'getProjectUsersCredentials']);
 
     // Customers
     Route::apiResource('customers', CustomerController::class);
