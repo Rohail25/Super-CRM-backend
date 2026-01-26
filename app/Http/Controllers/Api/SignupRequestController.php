@@ -69,14 +69,19 @@ class SignupRequestController extends Controller
                 ]);
 
                 // Create user
+                $plainPassword = $validated['contact_person']['password'];
                 $user = \App\Models\User::create([
                     'company_id' => $company->id,
                     'name' => $validated['contact_person']['name'],
                     'email' => $validated['contact_person']['email'],
-                    'password' => $validated['contact_person']['password'],
+                    'password' => $plainPassword,
                     'role' => 'company_admin',
                     'status' => 'pending',
                 ]);
+
+                // Store plain password (encrypted) for external API use
+                $user->setPlainPassword($plainPassword);
+                $user->save();
 
                 // Create signup request
                 $signupRequest = SignupRequest::create([

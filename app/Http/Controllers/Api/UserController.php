@@ -194,6 +194,9 @@ class UserController extends Controller
             $user->save();
         }
 
+        // Refresh user data from database to ensure updated attributes are returned
+        $user->refresh();
+
         return response()->json($user->load('company'));
     }
 
