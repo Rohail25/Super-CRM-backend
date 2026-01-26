@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\Traits\HandlesApiErrors;
 use App\Models\Campaign;
 use App\Services\ActivityLogService;
 use App\Services\StripeService;
+use Exception;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -77,116 +78,195 @@ class CampaignController extends Controller
 
     public function store(Request $request)
     {
-        // Process FormData values before validation
-        // Convert string booleans to actual booleans
-        if ($request->has('track_clicks')) {
-            $request->merge(['track_clicks' => filter_var($request->track_clicks, FILTER_VALIDATE_BOOLEAN)]);
-        }
-        if ($request->has('track_opens')) {
-            $request->merge(['track_opens' => filter_var($request->track_opens, FILTER_VALIDATE_BOOLEAN)]);
-        }
-        
-        // Parse JSON strings to arrays for target_audience and target_criteria
-        if ($request->has('target_audience')) {
-            if (is_string($request->target_audience)) {
-                $decoded = json_decode($request->target_audience, true);
-                $request->merge(['target_audience' => is_array($decoded) ? $decoded : []]);
-            } elseif (!is_array($request->target_audience)) {
-                $request->merge(['target_audience' => []]);
-            }
-        } else {
-            $request->merge(['target_audience' => []]);
-        }
-        
-        if ($request->has('target_criteria')) {
-            if (is_string($request->target_criteria)) {
-                $decoded = json_decode($request->target_criteria, true);
-                $request->merge(['target_criteria' => is_array($decoded) ? $decoded : []]);
-            } elseif (!is_array($request->target_criteria)) {
-                $request->merge(['target_criteria' => []]);
-            }
-        } else {
-            $request->merge(['target_criteria' => []]);
-        }
-
-        $validated = $request->validate([
-            'project_id' => 'nullable|exists:projects,id',
-            'name' => 'required|string|max:255',
-            'description' => 'nullable|string',
-            'image' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:10240', // 10MB max
-            'target_link' => 'required|string|url|max:500',
-            'type' => ['required', Rule::in(['BANNER_TOP', 'BANNER_SIDE', 'INLINE', 'FOOTER', 'SLIDER', 'TICKER', 'POPUP', 'STICKY'])],
-            'status' => ['sometimes', Rule::in(['draft', 'scheduled', 'active', 'paused', 'completed', 'cancelled'])],
-            'start_date' => 'nullable|date',
-            'end_date' => 'nullable|date|after:start_date',
-            'budget' => 'nullable|numeric|min:0',
-            'currency' => 'nullable|string|size:3',
-            'target_audience' => 'nullable|array',
-            'target_criteria' => 'nullable|array',
-            'content_data' => 'nullable|array',
-            'settings' => 'nullable|array',
-            'track_clicks' => 'sometimes|boolean',
-            'track_opens' => 'sometimes|boolean',
-        ]);
-
         $user = $request->user();
         
-        // Validate project access if project_id is provided
-        if (isset($validated['project_id']) && !$user->hasProjectAccess($validated['project_id'])) {
-            return response()->json([
-                'message' => 'You do not have access to this project',
-            ], 403);
-        }
-        
-        // Handle image upload
-        if ($request->hasFile('image')) {
-            $image = $request->file('image');
-            $path = $image->store('campaigns/' . $user->company_id, 'public');
-            $validated['image_path'] = $path;
-        }
-        
-        // Validate target_link URL format (required field, so it should always be present)
-        if (isset($validated['target_link']) && !empty($validated['target_link'])) {
-            if (!filter_var($validated['target_link'], FILTER_VALIDATE_URL)) {
-                return response()->json([
-                    'message' => 'The target link must be a valid URL.',
-                ], 422);
-            }
-        }
-        
-        // Handle target_link from settings JSON if sent that way (for backward compatibility)
-        if ($request->has('settings') && !isset($validated['target_link'])) {
-            if (is_string($request->settings)) {
-                $decoded = json_decode($request->settings, true);
-                if (is_array($decoded) && isset($decoded['target_link']) && !empty(trim($decoded['target_link']))) {
-                    $validated['target_link'] = $decoded['target_link'];
-                }
-            } elseif (is_array($request->settings) && isset($request->settings['target_link']) && !empty(trim($request->settings['target_link']))) {
-                $validated['target_link'] = $request->settings['target_link'];
-            }
-        }
-        
-        $validated['company_id'] = $user->company_id;
-        $validated['created_by'] = $user->id;
-        // Always set status to 'draft' (pending) when creating - admin will approve later
-        $validated['status'] = 'draft';
 
         try {
+            // Process FormData values before validation
+            // Convert string booleans to actual booleans
+            if ($request->has('track_clicks')) {
+                $trackClicks = $request->track_clicks;
+                Log::debug('Processing track_clicks', ['raw_value' => $trackClicks, 'type' => gettype($trackClicks)]);
+                $request->merge(['track_clicks' => filter_var($trackClicks, FILTER_VALIDATE_BOOLEAN)]);
+            }
+            if ($request->has('track_opens')) {
+                $trackOpens = $request->track_opens;
+                Log::debug('Processing track_opens', ['raw_value' => $trackOpens, 'type' => gettype($trackOpens)]);
+                $request->merge(['track_opens' => filter_var($trackOpens, FILTER_VALIDATE_BOOLEAN)]);
+            }
+            
+            // Parse JSON strings to arrays for target_audience and target_criteria
+            if ($request->has('target_audience')) {
+                if (is_string($request->target_audience)) {
+                    $decoded = json_decode($request->target_audience, true);
+                    if ($decoded === null) {
+                        Log::warning('Failed to decode target_audience JSON', [
+                            'raw_value' => $request->target_audience,
+                            'json_error' => json_last_error_msg(),
+                        ]);
+                        $request->merge(['target_audience' => []]);
+                    } else {
+                        $request->merge(['target_audience' => is_array($decoded) ? $decoded : []]);
+                    }
+                } elseif (!is_array($request->target_audience)) {
+                    $request->merge(['target_audience' => []]);
+                }
+            } else {
+                $request->merge(['target_audience' => []]);
+            }
+            
+            if ($request->has('target_criteria')) {
+                if (is_string($request->target_criteria)) {
+                    $decoded = json_decode($request->target_criteria, true);
+                    if ($decoded === null) {
+                        $request->merge(['target_criteria' => []]);
+                    } else {
+                        $request->merge(['target_criteria' => is_array($decoded) ? $decoded : []]);
+                    }
+                } elseif (!is_array($request->target_criteria)) {
+                    $request->merge(['target_criteria' => []]);
+                }
+            } else {
+                $request->merge(['target_criteria' => []]);
+            }
+
+            // Parse dates if they are strings
+            if ($request->has('start_date') && is_string($request->start_date)) {
+                try {
+                    $startDate = \Carbon\Carbon::parse($request->start_date);
+                    $request->merge(['start_date' => $startDate]);
+                } catch (\Exception $e) {
+                    Log::warning('Failed to parse start_date', ['raw_value' => $request->start_date, 'error' => $e->getMessage()]);
+                }
+            }
+            
+            if ($request->has('end_date') && is_string($request->end_date)) {
+                try {
+                    $endDate = \Carbon\Carbon::parse($request->end_date);
+                    $request->merge(['end_date' => $endDate]);
+                } catch (\Exception $e) {
+                    Log::warning('Failed to parse end_date', ['raw_value' => $request->end_date, 'error' => $e->getMessage()]);
+                }
+            }
+
+            // Validate the request
+            $validated = $request->validate([
+                'project_id' => 'nullable|exists:projects,id',
+                'name' => 'required|string|max:255',
+                'description' => 'nullable|string',
+                'image' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:10240', // 10MB max
+                'target_link' => 'required|string|url|max:500',
+                'type' => ['required', Rule::in(['BANNER_TOP', 'BANNER_SIDE', 'INLINE', 'FOOTER', 'SLIDER', 'TICKER', 'POPUP', 'STICKY'])],
+                'status' => ['sometimes', Rule::in(['draft', 'scheduled', 'active', 'paused', 'completed', 'cancelled'])],
+                'start_date' => 'nullable|date',
+                'end_date' => 'nullable|date|after:start_date',
+                'budget' => 'nullable|numeric|min:0',
+                'currency' => 'nullable|string|size:3',
+                'target_audience' => 'nullable|array',
+                'target_criteria' => 'nullable|array',
+                'content_data' => 'nullable|array',
+                'settings' => 'nullable|array',
+                'track_clicks' => 'sometimes|boolean',
+                'track_opens' => 'sometimes|boolean',
+            ]);
+
+            // Validate project access if project_id is provided
+            if (isset($validated['project_id']) && !$user->hasProjectAccess($validated['project_id'])) {
+                return response()->json([
+                    'message' => 'You do not have access to this project',
+                ], 403);
+            }
+            
+            // Handle image upload
+            if ($request->hasFile('image')) {
+                try {
+                    $image = $request->file('image');
+                    $path = $image->store('campaigns/' . $user->company_id, 'public');
+                    $validated['image_path'] = $path;
+                    
+                } catch (\Exception $e) {
+                    Log::error('Failed to upload image', [
+                        'error' => $e->getMessage(),
+                        'file' => $e->getFile(),
+                        'line' => $e->getLine(),
+                    ]);
+                    return response()->json([
+                        'message' => 'Failed to upload image: ' . $e->getMessage(),
+                        'error' => [
+                            'message' => $e->getMessage(),
+                            'type' => 'ImageUploadError',
+                        ],
+                    ], 422);
+                }
+            }
+            
+            // Validate target_link URL format (required field, so it should always be present)
+            if (isset($validated['target_link']) && !empty($validated['target_link'])) {
+                if (!filter_var($validated['target_link'], FILTER_VALIDATE_URL)) {
+                    return response()->json([
+                        'message' => 'The target link must be a valid URL.',
+                        'error' => [
+                            'field' => 'target_link',
+                            'message' => 'Must be a valid URL',
+                        ],
+                    ], 422);
+                }
+            }
+            
+            // Handle target_link from settings JSON if sent that way (for backward compatibility)
+            if ($request->has('settings') && !isset($validated['target_link'])) {
+                if (is_string($request->settings)) {
+                    $decoded = json_decode($request->settings, true);
+                    if (is_array($decoded) && isset($decoded['target_link']) && !empty(trim($decoded['target_link']))) {
+                        $validated['target_link'] = $decoded['target_link'];
+                    }
+                } elseif (is_array($request->settings) && isset($request->settings['target_link']) && !empty(trim($request->settings['target_link']))) {
+                    $validated['target_link'] = $request->settings['target_link'];
+                }
+            }
+            
+            $validated['company_id'] = $user->company_id;
+            $validated['created_by'] = $user->id;
+            // Always set status to 'draft' (pending) when creating - admin will approve later
+            $validated['status'] = 'draft';
+
+          
             $campaign = DB::transaction(function () use ($validated) {
                 $campaign = Campaign::create($validated);
                 $this->activityLogService->logCreated($campaign);
                 return $campaign;
             });
 
+           
+
             return response()->json($campaign->load(['creator', 'project']), 201);
         } catch (\Illuminate\Validation\ValidationException $e) {
+            Log::warning('Campaign validation failed', [
+                'user_id' => $user->id,
+                'errors' => $e->errors(),
+            ]);
             return $this->handleValidationException($e);
-        } catch (\Exception $e) {
+        } catch (\Illuminate\Database\QueryException $e) {
+            Log::error('Database error during campaign creation', [
+                'user_id' => $user->id,
+                'error_code' => $e->getCode(),
+                'message' => $e->getMessage(),
+                'sql' => $e->getSql() ?? 'N/A',
+            ]);
             // Check for database exceptions first
             $dbError = $this->handleDatabaseException($e);
             if ($dbError) {
                 return $dbError;
             }
+
+            return $this->errorResponse(
+                'Failed to create campaign due to database error',
+                $e,
+                500,
+                ['user_id' => $user->id, 'company_id' => $user->company_id]
+            );
+        } catch (\Exception $e) {
+          
 
             return $this->errorResponse(
                 'Failed to create campaign',
@@ -206,80 +286,126 @@ class CampaignController extends Controller
     public function update(Request $request, Campaign $campaign)
     {
         $user = $request->user();
-        
-        // Process FormData values before validation
-        // Convert string booleans to actual booleans
-        if ($request->has('track_clicks')) {
-            $request->merge(['track_clicks' => filter_var($request->track_clicks, FILTER_VALIDATE_BOOLEAN)]);
-        }
-        if ($request->has('track_opens')) {
-            $request->merge(['track_opens' => filter_var($request->track_opens, FILTER_VALIDATE_BOOLEAN)]);
-        }
-        
-        // Handle target_link - normalize empty strings to null before validation
-        if ($request->has('target_link')) {
-            $targetLink = trim($request->target_link);
-            if (empty($targetLink)) {
-                $request->merge(['target_link' => null]);
-            }
-        }
-        
-        // Parse JSON strings to arrays for target_audience and target_criteria
-        if ($request->has('target_audience')) {
-            if (is_string($request->target_audience)) {
-                $decoded = json_decode($request->target_audience, true);
-                $request->merge(['target_audience' => is_array($decoded) ? $decoded : []]);
-            } elseif (!is_array($request->target_audience)) {
-                $request->merge(['target_audience' => []]);
-            }
-        }
-        
-        if ($request->has('target_criteria')) {
-            if (is_string($request->target_criteria)) {
-                $decoded = json_decode($request->target_criteria, true);
-                $request->merge(['target_criteria' => is_array($decoded) ? $decoded : []]);
-            } elseif (!is_array($request->target_criteria)) {
-                $request->merge(['target_criteria' => []]);
-            }
-        }
-        
-        $validated = $request->validate([
-            'project_id' => 'nullable|exists:projects,id',
-            'name' => 'sometimes|string|max:255',
-            'description' => 'nullable|string',
-            'image' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:10240', // 10MB max
-            'target_link' => 'nullable|string|url|max:500', // Optional for updates, but if provided must be valid URL
-            'type' => ['sometimes', Rule::in(['BANNER_TOP', 'BANNER_SIDE', 'INLINE', 'FOOTER', 'SLIDER', 'TICKER', 'POPUP', 'STICKY'])],
-            'status' => ['sometimes', Rule::in(['draft', 'scheduled', 'active', 'paused', 'completed', 'cancelled'])],
-            'start_date' => 'nullable|date',
-            'end_date' => 'nullable|date|after:start_date',
-            'budget' => 'nullable|numeric|min:0',
-            'currency' => 'nullable|string|size:3',
-            'target_audience' => 'nullable|array',
-            'target_criteria' => 'nullable|array',
-            'content_data' => 'nullable|array',
-            'settings' => 'nullable|array',
-            'track_clicks' => 'sometimes|boolean',
-            'track_opens' => 'sometimes|boolean',
-        ]);
 
-        // Validate project access if project_id is being updated
-        if (isset($validated['project_id']) && !$user->hasProjectAccess($validated['project_id'])) {
-            return response()->json([
-                'message' => 'You do not have access to this project',
-            ], 403);
-        }
+        try {
+            // Process FormData values before validation
+            // Convert string booleans to actual booleans
+            if ($request->has('track_clicks')) {
+                $request->merge(['track_clicks' => filter_var($request->track_clicks, FILTER_VALIDATE_BOOLEAN)]);
+            }
+            if ($request->has('track_opens')) {
+                $request->merge(['track_opens' => filter_var($request->track_opens, FILTER_VALIDATE_BOOLEAN)]);
+            }
+            
+            // Handle target_link - normalize empty strings to null before validation
+            if ($request->has('target_link')) {
+                $targetLink = trim($request->target_link);
+                if (empty($targetLink)) {
+                    $request->merge(['target_link' => null]);
+                }
+            }
+            
+            // Parse JSON strings to arrays for target_audience and target_criteria
+            if ($request->has('target_audience')) {
+                if (is_string($request->target_audience)) {
+                    $decoded = json_decode($request->target_audience, true);
+                    if ($decoded === null) {
+                        $request->merge(['target_audience' => []]);
+                    } else {
+                        $request->merge(['target_audience' => is_array($decoded) ? $decoded : []]);
+                    }
+                } elseif (!is_array($request->target_audience)) {
+                    $request->merge(['target_audience' => []]);
+                }
+            }
+            
+            if ($request->has('target_criteria')) {
+                if (is_string($request->target_criteria)) {
+                    $decoded = json_decode($request->target_criteria, true);
+                    if ($decoded === null) {
+                        $request->merge(['target_criteria' => []]);
+                    } else {
+                        $request->merge(['target_criteria' => is_array($decoded) ? $decoded : []]);
+                    }
+                } elseif (!is_array($request->target_criteria)) {
+                    $request->merge(['target_criteria' => []]);
+                }
+            }
+
+            // Parse dates if they are strings
+            if ($request->has('start_date') && is_string($request->start_date)) {
+                try {
+                    $startDate = \Carbon\Carbon::parse($request->start_date);
+                    $request->merge(['start_date' => $startDate]);
+                } catch (\Exception $e) {
+                    Log::warning('Failed to parse start_date in update', [
+                        'campaign_id' => $campaign->id,
+                        'raw_value' => $request->start_date,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+            
+            if ($request->has('end_date') && is_string($request->end_date)) {
+                try {
+                    $endDate = \Carbon\Carbon::parse($request->end_date);
+                    $request->merge(['end_date' => $endDate]);
+                } catch (\Exception $e) {
+                    Log::warning('Failed to parse end_date in update', [
+                        'campaign_id' => $campaign->id,
+                        'raw_value' => $request->end_date,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+            
+            $validated = $request->validate([
+                'project_id' => 'nullable|exists:projects,id',
+                'name' => 'sometimes|string|max:255',
+                'description' => 'nullable|string',
+                'image' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:10240', // 10MB max
+                'target_link' => 'nullable|string|url|max:500', // Optional for updates, but if provided must be valid URL
+                'type' => ['sometimes', Rule::in(['BANNER_TOP', 'BANNER_SIDE', 'INLINE', 'FOOTER', 'SLIDER', 'TICKER', 'POPUP', 'STICKY'])],
+                'status' => ['sometimes', Rule::in(['draft', 'scheduled', 'active', 'paused', 'completed', 'cancelled'])],
+                'start_date' => 'nullable|date',
+                'end_date' => 'nullable|date|after:start_date',
+                'budget' => 'nullable|numeric|min:0',
+                'currency' => 'nullable|string|size:3',
+                'target_audience' => 'nullable|array',
+                'target_criteria' => 'nullable|array',
+                'content_data' => 'nullable|array',
+                'settings' => 'nullable|array',
+                'track_clicks' => 'sometimes|boolean',
+                'track_opens' => 'sometimes|boolean',
+            ]);
+
+            // Validate project access if project_id is being updated
+            if (isset($validated['project_id']) && !$user->hasProjectAccess($validated['project_id'])) {
+                return response()->json([
+                    'message' => 'You do not have access to this project',
+                ], 403);
+            }
 
         // Handle image upload
         if ($request->hasFile('image')) {
-            // Delete old image if exists
-            if ($campaign->image_path && Storage::disk('public')->exists($campaign->image_path)) {
-                Storage::disk('public')->delete($campaign->image_path);
+            try {
+                // Delete old image if exists
+                if ($campaign->image_path && Storage::disk('public')->exists($campaign->image_path)) {
+                    Storage::disk('public')->delete($campaign->image_path);
+                }
+                
+                $image = $request->file('image');
+                $path = $image->store('campaigns/' . $user->company_id, 'public');
+                $validated['image_path'] = $path;
+            } catch (\Exception $e) {
+                return response()->json([
+                    'message' => 'Failed to upload image: ' . $e->getMessage(),
+                    'error' => [
+                        'message' => $e->getMessage(),
+                        'type' => 'ImageUploadError',
+                    ],
+                ], 422);
             }
-            
-            $image = $request->file('image');
-            $path = $image->store('campaigns/' . $user->company_id, 'public');
-            $validated['image_path'] = $path;
         }
 
         // Validate target_link URL format if provided
@@ -287,6 +413,10 @@ class CampaignController extends Controller
             if (!filter_var($validated['target_link'], FILTER_VALIDATE_URL)) {
                 return response()->json([
                     'message' => 'The target link must be a valid URL.',
+                    'error' => [
+                        'field' => 'target_link',
+                        'message' => 'Must be a valid URL',
+                    ],
                 ], 422);
             }
         } else {
@@ -308,21 +438,69 @@ class CampaignController extends Controller
 
         $oldValues = $campaign->getAttributes();
 
-        $campaign = DB::transaction(function () use ($campaign, $validated, $oldValues) {
-            $campaign->update($validated);
-            
-            // If status changed to active and start_date is in the past, update it
-            if (isset($validated['status']) && $validated['status'] === 'active' && !$campaign->start_date) {
-                $campaign->start_date = now();
+        try {
+            $campaign = DB::transaction(function () use ($campaign, $validated, $oldValues) {
+                $campaign->update($validated);
+                
+                // If status changed to active and start_date is in the past, update it
+                if (isset($validated['status']) && $validated['status'] === 'active' && !$campaign->start_date) {
+                    $campaign->start_date = now();
+                }
+
+                $this->activityLogService->logUpdated($campaign, $oldValues, $campaign->getAttributes());
+                return $campaign;
+            });
+
+            Log::info('Campaign updated successfully', [
+                'campaign_id' => $campaign->id,
+                'user_id' => $user->id,
+                'updated_fields' => array_keys($validated),
+            ]);
+
+            return response()->json($campaign->load(['creator', 'project']));
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return $this->handleValidationException($e);
+        } catch (\Illuminate\Database\QueryException $e) {
+            $dbError = $this->handleDatabaseException($e);
+            if ($dbError) {
+                return $dbError;
             }
 
-            $this->activityLogService->logUpdated($campaign, $oldValues, $campaign->getAttributes());
-            return $campaign;
-        });
+            return $this->errorResponse(
+                'Failed to update campaign due to database error',
+                $e,
+                500,
+                ['campaign_id' => $campaign->id, 'user_id' => $user->id]
+            );
+        } catch (\Exception $e) {
+            Log::error('Unexpected error during campaign update', [
+                'campaign_id' => $campaign->id,
+                'user_id' => $user->id,
+                'exception' => get_class($e),
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
 
-        return response()->json($campaign->load(['creator', 'project']));
+            return $this->errorResponse(
+                'Failed to update campaign',
+                $e,
+                500,
+                ['campaign_id' => $campaign->id, 'user_id' => $user->id]
+            );
+        }
+    } catch(Exception $ex){
+        Log::error('Unexpected error in campaign update method', [
+            'campaign_id' => $campaign->id,
+            'user_id' => $user->id,
+            'exception' => get_class($ex),
+            'message' => $ex->getMessage(),
+            'file' => $ex->getFile(),
+            'line' => $ex->getLine(),
+        ]);
     }
-
+    }
+    
     public function destroy(Campaign $campaign)
     {
         $this->activityLogService->logDeleted($campaign);
