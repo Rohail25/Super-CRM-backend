@@ -45,14 +45,14 @@ class OpportunityController extends Controller
             }
             $query->where('project_id', $projectId);
         } elseif (!$user->isSuperAdmin()) {
-            // For non-super-admin, filter opportunities to only show projects they have access to
+            
             $accessibleProjectIds = $user->getAccessibleProjectIds();
-            if (empty($accessibleProjectIds)) {
-                // User has no project access, return empty result
-                $query->whereRaw('1 = 0'); // Force no results
-            } else {
-                $query->whereIn('project_id', $accessibleProjectIds);
+            $query->where(function($q) use ($accessibleProjectIds) {
+                if (!empty($accessibleProjectIds)) {
+                    $q->whereIn('project_id', $accessibleProjectIds);
             }
+                $q->orWhereNull('project_id');
+            });
         }
         if ($request->has('search')) {
             $search = $request->search;

@@ -107,13 +107,31 @@ class SupportTicket extends Model
     public static function generateTicketNumber(): string
     {
         $year = date('Y');
-        $lastTicket = static::whereYear('created_at', $year)
+        
+        // Find the last ticket number globally (ignoring company scope) matching the current year pattern
+        $lastTicket = static::withoutGlobalScopes()
+            ->where('ticket_number', 'like', "TKT-$year-%")
             ->orderBy('id', 'desc')
             ->first();
         
-        $number = $lastTicket ? ((int) substr($lastTicket->ticket_number, -6)) + 1 : 1;
+        if ($lastTicket) {
+            // Extract the numeric part (format: TKT-YYYY-NNNNNN)
+            $parts = explode('-', $lastTicket->ticket_number);
+            $lastNumber = isset($parts[2]) ? (int) $parts[2] : 0;
+            $number = $lastNumber + 1;
+        } else {
+            $number = 1;
+        }
         
-        return 'TKT-' . $year . '-' . str_pad($number, 6, '0', STR_PAD_LEFT);
+        $ticketNumber = 'TKT-' . $year . '-' . str_pad($number, 6, '0', STR_PAD_LEFT);
+        
+        // Collision check loop to ensure uniqueness
+        while (static::withoutGlobalScopes()->where('ticket_number', $ticketNumber)->exists()) {
+            $number++;
+            $ticketNumber = 'TKT-' . $year . '-' . str_pad($number, 6, '0', STR_PAD_LEFT);
+        }
+        
+        return $ticketNumber;
     }
 
     public function scopeOpen($query)

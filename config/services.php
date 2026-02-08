@@ -45,7 +45,10 @@ return [
         'account_sid' => env('TWILIO_ACCOUNT_SID'),
         'auth_token' => env('TWILIO_AUTH_TOKEN'),
         'phone_number' => env('TWILIO_PHONE_NUMBER'),
+        'whatsapp_number' => env('TWILIO_WHATSAPP_NUMBER'),
         'webhook_secret' => env('TWILIO_WEBHOOK_SECRET'),
+        'webhook_url' => env('TWILIO_WEBHOOK_URL'), // Public URL for webhooks (use ngrok for local dev)
+        'agent_phone_number' => env('TWILIO_AGENT_PHONE_NUMBER'), // Agent's phone number (who will answer the call)
     ],
 
 ];

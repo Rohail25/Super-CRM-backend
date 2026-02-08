@@ -9,6 +9,7 @@ use App\Services\SignupApprovalService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Hash;
 
 class SignupRequestController extends Controller
 {
@@ -70,6 +71,7 @@ class SignupRequestController extends Controller
 
                 // Create user
                 $plainPassword = $validated['contact_person']['password'];
+                
                 $user = \App\Models\User::create([
                     'company_id' => $company->id,
                     'name' => $validated['contact_person']['name'],

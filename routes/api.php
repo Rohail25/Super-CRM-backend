@@ -21,6 +21,7 @@ use App\Http\Controllers\Api\CampaignController;
 use App\Http\Controllers\Api\SubscriptionController;
 use App\Http\Controllers\Api\FollowUpController;
 use App\Http\Controllers\Api\UserController;
+use App\Http\Controllers\Api\EmailController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -83,9 +84,20 @@ Route::middleware('auth:sanctum')->group(function () {
     // Leads
     Route::apiResource('leads', LeadController::class);
     
-    // Follow-ups for leads
+    // Email Bulk Management
+    Route::get('/emails', [EmailController::class, 'index']);
+    Route::post('/emails/upload', [EmailController::class, 'upload']);
+    Route::post('/emails/send', [EmailController::class, 'send']);
+    
+    // Follow-ups for customers
     Route::get('/customers/{customer}/follow-ups', [FollowUpController::class, 'index']);
     Route::post('/customers/{customer}/follow-ups', [FollowUpController::class, 'store']);
+    
+    // Follow-ups for leads
+    Route::get('/leads/{lead}/follow-ups', [FollowUpController::class, 'indexForLead']);
+    Route::post('/leads/{lead}/follow-ups', [FollowUpController::class, 'storeForLead']);
+    
+    // Follow-up management
     Route::put('/follow-ups/{followUp}', [FollowUpController::class, 'update']);
     Route::post('/follow-ups/{followUp}/complete', [FollowUpController::class, 'complete']);
     Route::delete('/follow-ups/{followUp}', [FollowUpController::class, 'destroy']);
@@ -174,3 +186,6 @@ Route::middleware('auth:sanctum')->group(function () {
 Route::post('/subscription/webhook', [SubscriptionController::class, 'webhook']);
 Route::post('/calls/twilio/status', [CallController::class, 'twilioStatusWebhook']);
 Route::get('/calls/twilio/twiml', [CallController::class, 'twilioTwiML']);
+
+// Communications
+Route::middleware('auth:sanctum')->post('/communications/whatsapp/send', [\App\Http\Controllers\Api\CommunicationController::class, 'sendWhatsApp']);

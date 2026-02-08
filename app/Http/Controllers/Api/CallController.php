@@ -471,19 +471,41 @@ class CallController extends Controller
 
     /**
      * Generate TwiML for Twilio calls.
+     * This endpoint is called by Twilio when a call is initiated.
+     * It generates TwiML that dials the customer's number.
      */
     public function twilioTwiML(Request $request)
     {
         $callId = $request->input('call_id');
         $call = Call::find($callId);
 
-        $message = 'Hello, this is a call from your CRM.';
-        if ($call && $call->notes) {
-            $message = 'Calling regarding: ' . ($call->contact_name ?? 'your inquiry');
+        if (!$call) {
+            // Return error TwiML if call not found
+            $twiml = '<?xml version="1.0" encoding="UTF-8"?>';
+            $twiml .= '<Response>';
+            $twiml .= '<Say voice="alice">Call not found. Please try again.</Say>';
+            $twiml .= '<Hangup/>';
+            $twiml .= '</Response>';
+            
+            return response($twiml, 200)->header('Content-Type', 'text/xml');
+        }
+
+        // Get the customer's phone number to dial
+        $phoneNumber = $call->contact_phone;
+        
+        // If no contact_phone, try to get from customer relationship
+        if (!$phoneNumber && $call->customer) {
+            $phoneNumber = $call->customer->phone;
+        }
+
+        // Prepare message
+        $message = 'Connecting your call';
+        if ($call->contact_name) {
+            $message = 'Connecting you to ' . $call->contact_name;
         }
 
         $twilioService = app(\App\Services\TwilioService::class);
-        $twiml = $twilioService->generateTwiML($message);
+        $twiml = $twilioService->generateTwiML($phoneNumber, $message);
 
         return response($twiml, 200)->header('Content-Type', 'text/xml');
     }

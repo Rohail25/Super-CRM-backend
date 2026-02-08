@@ -4,32 +4,15 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Http\Controllers\Api\Traits\HandlesApiErrors;
-use App\Models\Customer;
-use App\Models\Opportunity;
-use App\Services\CustomerDeduplicationService;
+use App\Models\Lead;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use PhpOffice\PhpSpreadsheet\IOFactory;
 
 class LeadController extends Controller
 {
     use HandlesApiErrors;
-    public function __construct(
-        private CustomerDeduplicationService $deduplicationService
-    ) {}
-
-    /**
-     * Map opportunity stage to lead status
-     */
-    private function mapStageToStatus(?string $stage): string
-    {
-        return match($stage) {
-            'prospecting', 'qualification' => 'hot',
-            'proposal', 'negotiation' => 'warm',
-            'closed_won' => 'converted',
-            'closed_lost', 'on_hold' => 'cold',
-            default => 'cold',
-        };
-    }
 
     /**
      * Display a listing of leads.
@@ -39,15 +22,19 @@ class LeadController extends Controller
         $user = $request->user();
         $companyId = $user->isSuperAdmin() && $request->has('company_id')
             ? $request->company_id
-            : $user->company_id;
+            : ($user->company_id ?? null);
 
-        // Get customers with their primary opportunity
-        // Note: Leads are independent - not tied to projects for now
-        $query = Customer::where('company_id', $companyId)
-            ->with(['company'])
-            ->with(['opportunities' => function ($q) {
-                $q->open()->latest()->with(['assignee'])->limit(1);
-            }]);
+        // Build query based on company_id
+        if ($user->isSuperAdmin() && !$request->has('company_id')) {
+            // Super admin without company_id filter - show all leads
+            $query = Lead::query();
+        } elseif ($companyId === null) {
+            // User with no company_id - show only leads with null company_id
+            $query = Lead::whereNull('company_id');
+        } else {
+            // User with company_id - show only their company's leads
+            $query = Lead::where('company_id', $companyId);
+        }
 
         // Apply search filter
         if ($request->has('search') && $request->search) {
@@ -55,172 +42,260 @@ class LeadController extends Controller
             $query->where(function ($q) use ($search) {
                 $q->where('email', 'like', "%{$search}%")
                     ->orWhere('phone', 'like', "%{$search}%")
-                    ->orWhere('first_name', 'like', "%{$search}%")
-                    ->orWhere('last_name', 'like', "%{$search}%");
+                    ->orWhere('name', 'like', "%{$search}%")
+                    ->orWhere('file_name', 'like', "%{$search}%");
             });
         }
 
-        $customers = $query->latest()->get();
-
-        // Transform to lead format
-        $leads = $customers->map(function ($customer) {
-            $opportunity = $customer->opportunities->first();
-            
-            // Get source from opportunity (manual text field, not tied to projects)
-            $source = $opportunity?->source ?? 'Direct';
-
-            // Map stage to status
-            $status = $this->mapStageToStatus($opportunity?->stage);
-
-            // Get assigned user name
-            $assignedTo = $opportunity?->assignee?->name;
-
-            return [
-                'id' => $customer->id,
-                'name' => $customer->full_name ?: ($customer->first_name . ' ' . $customer->last_name),
-                'email' => $customer->email,
-                'phone' => $customer->phone,
-                'source' => $source,
-                'status' => $status,
-                'value' => $opportunity?->value ? (float) $opportunity->value : null,
-                'assigned_to' => $assignedTo,
-                'created_at' => $customer->created_at->format('Y-m-d H:i:s'),
-                'opportunity_id' => $opportunity?->id,
-            ];
-        });
-
         // Apply status filter
         if ($request->has('status') && $request->status !== 'all') {
-            $leads = $leads->filter(function ($lead) use ($request) {
-                return $lead['status'] === $request->status;
-            })->values();
+            $query->where('status', $request->status);
         }
 
         // Apply source filter
         if ($request->has('source') && $request->source !== 'all') {
-            $leads = $leads->filter(function ($lead) use ($request) {
-                return $lead['source'] === $request->source;
-            })->values();
+            $query->where('source', $request->source);
         }
 
-        return response()->json([
-            'data' => $leads->values(),
-            'total' => $leads->count(),
-        ]);
+        // Apply category filter
+        if ($request->has('category') && $request->category !== 'all') {
+            $query->where('category', $request->category);
+        }
+
+        $leads = $query->latest()->paginate($request->get('per_page', 15));
+
+        return response()->json($leads);
     }
 
     /**
-     * Store a newly created lead.
+     * Store a newly created lead (File Upload).
      */
     public function store(Request $request)
     {
         $user = $request->user();
-        $companyId = $user->isSuperAdmin() && $request->has('company_id')
-            ? $request->company_id
-            : $user->company_id;
+        
+        // Determine company_id (can be null)
+        if ($user->isSuperAdmin() && $request->has('company_id')) {
+            $companyId = $request->company_id;
+        } else {
+            $companyId = $user->company_id ?? null;
+        }
 
-        $validated = $request->validate([
-            'name' => 'required|string|max:255',
-            'email' => 'required|email',
-            'phone' => 'required|string',
-            'source' => 'nullable|string|max:255',
-            'status' => 'nullable|in:hot,warm,cold,converted',
-            'value' => 'nullable|numeric|min:0',
-            'assigned_to' => 'nullable|exists:users,id',
-            // 'project_id' => 'nullable|exists:projects,id', // Removed - leads are independent for now
+        // Validate company_id if provided (for super admin)
+        if ($user->isSuperAdmin() && $request->has('company_id') && !empty($request->company_id)) {
+            $request->validate([
+                'company_id' => 'exists:companies,id',
+            ]);
+        }
+
+        $request->validate([
+            'file' => 'required|file|mimes:csv,txt,xlsx,xls',
+            'category' => 'required|string|in:Hotel,B&B,Farmacia,Oculista,Ortopedico,Aziende vinicole,Salumificio,Doctors, baby hotel, etc.',
+            'format' => 'required|string|in:csv,excel',
         ]);
 
-        // Map status to opportunity stage
-        $stage = match($validated['status'] ?? 'cold') {
-            'hot' => 'prospecting',
-            'warm' => 'proposal',
-            'cold' => 'on_hold',
-            'converted' => 'closed_won',
-            default => 'prospecting',
-        };
+        $file = $request->file('file');
+        $fileName = $file->getClientOriginalName();
+        $format = $request->input('format');
+        $category = $request->input('category');
 
-        // Split name into first and last name
-        $nameParts = explode(' ', $validated['name'], 2);
-        $firstName = $nameParts[0] ?? null;
-        $lastName = $nameParts[1] ?? null;
+        try {
+            $data = $this->parseFile($file, $format);
+            
+            if (empty($data['headers']) || empty($data['records'])) {
+                return response()->json(['message' => 'File is empty or invalid format'], 400);
+            }
 
-        $customerData = [
-            'email' => $validated['email'],
-            'phone' => $validated['phone'],
-            'first_name' => $firstName,
-            'last_name' => $lastName,
+            // Create a single lead record representing this file upload
+            // The actual data is stored in the JSON columns
+            $lead = Lead::create([
+                'company_id' => $companyId,
+                'name' => $fileName, // Use filename as the lead name for now
+                'category' => $category,
+                'status' => 'cold', // Default status
+                'file_name' => $fileName,
+                'file_format' => $format,
+                'file_headers' => $data['headers'],
+                'file_records' => $data['records'],
+                'assigned_to' => $user->id, // Assign to uploader initially
+            ]);
+
+            return response()->json($lead, 201);
+
+        } catch (\Exception $e) {
+            Log::error('Lead file upload failed', ['error' => $e->getMessage()]);
+            return response()->json(['message' => 'Failed to process file: ' . $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Convert string to UTF-8 encoding, handling malformed characters.
+     */
+    private function convertToUtf8($string)
+    {
+        if (!is_string($string)) {
+            return $string;
+        }
+
+        // Remove BOM if present
+        $string = str_replace("\xEF\xBB\xBF", '', $string);
+        
+        // Check if already valid UTF-8
+        if (mb_check_encoding($string, 'UTF-8')) {
+            return trim($string);
+        }
+
+        // Try to detect encoding and convert
+        $detectedEncoding = mb_detect_encoding($string, ['UTF-8', 'ISO-8859-1', 'Windows-1252', 'ASCII'], true);
+        
+        if ($detectedEncoding && $detectedEncoding !== 'UTF-8') {
+            $converted = mb_convert_encoding($string, 'UTF-8', $detectedEncoding);
+            // If conversion failed, use iconv as fallback
+            if ($converted === false) {
+                $converted = @iconv($detectedEncoding, 'UTF-8//IGNORE', $string);
+            }
+            return trim($converted !== false ? $converted : $string);
+        }
+
+        // If detection failed, try to clean invalid UTF-8 characters
+        return trim(mb_convert_encoding($string, 'UTF-8', 'UTF-8'));
+    }
+
+    /**
+     * Parse the uploaded file based on format.
+     */
+    private function parseFile($file, $format)
+    {
+        $headers = [];
+        $records = [];
+
+        if ($format === 'csv') {
+            $path = $file->getRealPath();
+            $handle = fopen($path, 'r');
+            if ($handle !== false) {
+                // Get headers (first row)
+                $headers = fgetcsv($handle);
+                if ($headers === false) {
+                    fclose($handle);
+                    throw new \Exception('Unable to read headers from CSV file');
+                }
+                
+                // Clean headers - remove BOM, convert to UTF-8, and trim whitespace
+                $headers = array_map(function($header) {
+                    return $this->convertToUtf8($header);
+                }, $headers);
+                
+                // Get records
+                while (($row = fgetcsv($handle)) !== false) {
+                    // Only add if row has data
+                    if (array_filter($row)) {
+                        // Convert each cell to UTF-8
+                        $row = array_map(function($cell) {
+                            return $this->convertToUtf8($cell);
+                        }, $row);
+                        
+                        // Ensure row has same number of columns as headers (pad or trim)
+                        while (count($row) < count($headers)) {
+                            $row[] = '';
+                        }
+                        if (count($row) > count($headers)) {
+                            $row = array_slice($row, 0, count($headers));
+                        }
+                        $records[] = $row;
+                    }
+                }
+                fclose($handle);
+            } else {
+                throw new \Exception('Unable to open CSV file');
+            }
+        } else {
+            // Excel format using PhpSpreadsheet
+            try {
+                $spreadsheet = IOFactory::load($file->getRealPath());
+                $worksheet = $spreadsheet->getActiveSheet();
+                $highestRow = $worksheet->getHighestRow();
+                $highestColumn = $worksheet->getHighestColumn();
+                $highestColumnIndex = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::columnIndexFromString($highestColumn);
+
+                if ($highestRow < 1) {
+                    throw new \Exception('Excel file is empty');
+                }
+
+                // Get headers (first row)
+                $headers = [];
+                for ($col = 1; $col <= $highestColumnIndex; $col++) {
+                    $columnLetter = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($col);
+                    $cell = $worksheet->getCell($columnLetter . '1');
+                    
+                    // Get calculated value (handles formulas automatically)
+                    $cellValue = $cell->getCalculatedValue();
+                    
+                    // Handle RichText
+                    if ($cellValue instanceof \PhpOffice\PhpSpreadsheet\RichText\RichText) {
+                        $cellValue = $cellValue->getPlainText();
+                    }
+                    
+                    $headers[] = $this->convertToUtf8($cellValue ?? '');
+                }
+
+                // Remove empty trailing headers
+                while (!empty($headers) && empty(end($headers))) {
+                    array_pop($headers);
+                }
+
+                if (empty($headers)) {
+                    throw new \Exception('No headers found in Excel file');
+                }
+
+                // Get records (starting from row 2)
+                for ($row = 2; $row <= $highestRow; $row++) {
+                    $record = [];
+                    for ($col = 1; $col <= count($headers); $col++) {
+                        $columnLetter = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($col);
+                        $cell = $worksheet->getCell($columnLetter . $row);
+                        
+                        // Get calculated value (handles formulas automatically)
+                        $cellValue = $cell->getCalculatedValue();
+                        
+                        // Handle RichText
+                        if ($cellValue instanceof \PhpOffice\PhpSpreadsheet\RichText\RichText) {
+                            $cellValue = $cellValue->getPlainText();
+                        }
+                        
+                        $record[] = $this->convertToUtf8($cellValue ?? '');
+                    }
+                    
+                    // Only add if row has at least one non-empty value
+                    if (array_filter($record)) {
+                        $records[] = $record;
+                    }
+                }
+            } catch (\PhpOffice\PhpSpreadsheet\Exception $e) {
+                throw new \Exception('Failed to parse Excel file: ' . $e->getMessage());
+            }
+        }
+
+        if (empty($headers)) {
+            throw new \Exception('No headers found in file');
+        }
+
+        return [
+            'headers' => $headers,
+            'records' => $records
         ];
-
-        $opportunityData = [
-            'name' => $validated['name'],
-            'stage' => $stage,
-            'value' => $validated['value'] ?? null,
-            'source' => $validated['source'] ?? null,
-            // 'project_id' => $validated['project_id'] ?? null, // Removed - leads independent
-            'assigned_to' => $validated['assigned_to'] ?? null,
-            'created_by' => $user->id,
-        ];
-
-        $result = DB::transaction(function () use ($customerData, $opportunityData, $companyId) {
-            // Create or find customer using deduplication service
-            $customer = $this->deduplicationService->findOrCreateCustomer($customerData, $companyId);
-
-            // Create opportunity
-            $opportunityData['company_id'] = $companyId;
-            $opportunityData['customer_id'] = $customer->id;
-            $opportunity = Opportunity::create($opportunityData);
-            $opportunity->calculateWeightedValue();
-            $opportunity->save();
-
-            return [
-                'customer' => $customer,
-                'opportunity' => $opportunity,
-            ];
-        });
-
-        // Format response
-        $lead = [
-            'id' => $result['customer']->id,
-            'name' => $result['customer']->full_name,
-            'email' => $result['customer']->email,
-            'phone' => $result['customer']->phone,
-            'source' => $result['opportunity']->source ?? 'Direct',
-            'status' => $this->mapStageToStatus($result['opportunity']->stage),
-            'value' => $result['opportunity']->value ? (float) $result['opportunity']->value : null,
-            'assigned_to' => $result['opportunity']->assignee?->name,
-            'created_at' => $result['customer']->created_at->format('Y-m-d H:i:s'),
-            'opportunity_id' => $result['opportunity']->id,
-        ];
-
-        return response()->json($lead, 201);
     }
 
     /**
      * Display the specified lead.
      */
-    public function show(Request $request, Customer $customer)
+    public function show(Request $request, Lead $lead)
     {
         $user = $request->user();
 
         // Check access
-        if (!$user->isSuperAdmin() && $customer->company_id !== $user->company_id) {
+        if (!$user->isSuperAdmin() && $lead->company_id !== $user->company_id) {
             abort(403, 'Access denied');
         }
-
-        $opportunity = $customer->opportunities()->open()->latest()->first();
-
-        $lead = [
-            'id' => $customer->id,
-            'name' => $customer->full_name,
-            'email' => $customer->email,
-            'phone' => $customer->phone,
-            'source' => $opportunity?->source ?? 'Direct',
-            'status' => $this->mapStageToStatus($opportunity?->stage),
-            'value' => $opportunity?->value ? (float) $opportunity->value : null,
-            'assigned_to' => $opportunity?->assignee?->name,
-            'created_at' => $customer->created_at->format('Y-m-d H:i:s'),
-            'opportunity_id' => $opportunity?->id,
-        ];
 
         return response()->json($lead);
     }
@@ -228,113 +303,22 @@ class LeadController extends Controller
     /**
      * Update the specified lead.
      */
-    public function update(Request $request, Customer $customer)
+    public function update(Request $request, Lead $lead)
     {
         $user = $request->user();
 
         // Check access
-        if (!$user->isSuperAdmin() && $customer->company_id !== $user->company_id) {
+        if (!$user->isSuperAdmin() && $lead->company_id !== $user->company_id) {
             abort(403, 'Access denied');
         }
 
         $validated = $request->validate([
-            'name' => 'sometimes|string|max:255',
-            'email' => 'sometimes|email|unique:customers,email,' . $customer->id,
-            'phone' => 'sometimes|string|unique:customers,phone,' . $customer->id,
-            'source' => 'nullable|string|max:255',
-            'status' => 'nullable|in:hot,warm,cold,converted',
-            'value' => 'nullable|numeric|min:0',
-            'assigned_to' => 'nullable|exists:users,id',
-            // 'project_id' => 'nullable|exists:projects,id', // Removed - leads are independent for now
+            'status' => 'sometimes|string',
+            'category' => 'sometimes|string',
+            'assigned_to' => 'sometimes|exists:users,id',
         ]);
 
-        $result = DB::transaction(function () use ($customer, $validated) {
-            // Update customer if name/email/phone changed
-            if (isset($validated['name']) || isset($validated['email']) || isset($validated['phone'])) {
-                $customerData = [];
-                
-                if (isset($validated['name'])) {
-                    $nameParts = explode(' ', $validated['name'], 2);
-                    $customerData['first_name'] = $nameParts[0] ?? null;
-                    $customerData['last_name'] = $nameParts[1] ?? null;
-                }
-                
-                if (isset($validated['email'])) {
-                    $customerData['email'] = $validated['email'];
-                }
-                
-                if (isset($validated['phone'])) {
-                    $customerData['phone'] = $validated['phone'];
-                }
-                
-                $customer->update($customerData);
-            }
-
-            // Get or create opportunity
-            $opportunity = $customer->opportunities()->open()->latest()->first();
-            
-            if (!$opportunity) {
-                // Create new opportunity if none exists
-                $opportunity = Opportunity::create([
-                    'company_id' => $customer->company_id,
-                    'customer_id' => $customer->id,
-                    'name' => $customer->full_name,
-                    'stage' => 'prospecting',
-                    'created_by' => auth()->id(),
-                ]);
-            }
-
-            // Map status to stage
-            if (isset($validated['status'])) {
-                $opportunity->stage = match($validated['status']) {
-                    'hot' => 'prospecting',
-                    'warm' => 'proposal',
-                    'cold' => 'on_hold',
-                    'converted' => 'closed_won',
-                    default => 'prospecting',
-                };
-            }
-
-            // Update opportunity fields
-            if (isset($validated['value'])) {
-                $opportunity->value = $validated['value'];
-            }
-            
-            if (isset($validated['source'])) {
-                $opportunity->source = $validated['source'];
-            }
-            
-            // Project integration will be handled separately later
-            // if (isset($validated['project_id'])) {
-            //     $opportunity->project_id = $validated['project_id'];
-            // }
-            
-            if (isset($validated['assigned_to'])) {
-                $opportunity->assigned_to = $validated['assigned_to'];
-            }
-
-            $opportunity->calculateWeightedValue();
-            $opportunity->save();
-
-            return [
-                'customer' => $customer->fresh(),
-                'opportunity' => $opportunity->fresh(['assignee']),
-            ];
-        });
-
-        // Format response
-        $lead = [
-            'id' => $result['customer']->id,
-            'name' => $result['customer']->full_name,
-            'email' => $result['customer']->email,
-            'phone' => $result['customer']->phone,
-            'source' => $result['opportunity']->source ?? 'Direct',
-            'status' => $this->mapStageToStatus($result['opportunity']->stage),
-            'value' => $result['opportunity']->value ? (float) $result['opportunity']->value : null,
-            'assigned_to' => $result['opportunity']->assignee?->name,
-            'created_at' => $result['customer']->created_at->format('Y-m-d H:i:s'),
-            'opportunity_id' => $result['opportunity']->id,
-        ];
+        $lead->update($validated);
 
         return response()->json($lead);
     }
@@ -342,16 +326,16 @@ class LeadController extends Controller
     /**
      * Remove the specified lead.
      */
-    public function destroy(Request $request, Customer $customer)
+    public function destroy(Request $request, Lead $lead)
     {
         $user = $request->user();
 
         // Check access
-        if (!$user->isSuperAdmin() && $customer->company_id !== $user->company_id) {
+        if (!$user->isSuperAdmin() && $lead->company_id !== $user->company_id) {
             abort(403, 'Access denied');
         }
 
-        $customer->delete();
+        $lead->delete();
 
         return response()->json(['message' => 'Lead deleted successfully'], 204);
     }

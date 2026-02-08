@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Controllers\Api\Traits\HandlesApiErrors;
 use App\Models\FollowUp;
 use App\Models\Customer;
+use App\Models\Lead;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -197,6 +198,108 @@ class FollowUpController extends Controller
     }
 
     /**
+     * Get follow-ups for a specific lead.
+     */
+    public function indexForLead(Request $request, Lead $lead)
+    {
+        $user = $request->user();
+
+        // Check access
+        if (!$user->isSuperAdmin()) {
+            if ($user->company_id) {
+                if ($lead->company_id !== $user->company_id) {
+                    return response()->json(['message' => 'Access denied'], 403);
+                }
+            } else {
+                if ($lead->company_id !== null) {
+                    return response()->json(['message' => 'Access denied'], 403);
+                }
+            }
+        }
+
+        $followUps = FollowUp::where('lead_id', $lead->id)
+            ->with(['creator', 'assignee', 'lead'])
+            ->orderBy('scheduled_at', 'asc')
+            ->get();
+
+        return response()->json($followUps);
+    }
+
+    /**
+     * Create a new follow-up for a lead.
+     */
+    public function storeForLead(Request $request, Lead $lead)
+    {
+        $user = $request->user();
+
+        // Refresh lead to ensure we have latest data
+        $lead->refresh();
+        
+        // Determine company_id based on user role
+        $companyId = null;
+        
+        if ($user->isSuperAdmin()) {
+            // Super admin: use lead's company_id
+            $companyId = $lead->company_id;
+            
+            // If still no company_id, try to get from request
+            if (!$companyId) {
+                $companyId = $request->input('company_id');
+            }
+        } else {
+            // Regular users (including company admin): use their company_id
+            $companyId = $user->company_id;
+            
+            if (!$companyId) {
+                $user->refresh();
+                $companyId = $user->company_id;
+                
+                if (!$companyId) {
+                    return response()->json([
+                        'message' => 'User must belong to a company. Your account does not have a company_id.',
+                        'user_id' => $user->id,
+                        'user_role' => $user->role,
+                    ], 400);
+                }
+            }
+            
+            // Check access - lead should belong to same company as user
+            if ($lead->company_id && $lead->company_id !== $companyId) {
+                return response()->json(['message' => 'Access denied'], 403);
+            }
+            
+            // If lead doesn't have company_id, update it to user's company_id for consistency
+            if (!$lead->company_id) {
+                $lead->update(['company_id' => $companyId]);
+            }
+        }
+
+        $validated = $request->validate([
+            'title' => 'required|string|max:255',
+            'notes' => 'nullable|string',
+            'type' => 'required|in:call,email,meeting,message,other',
+            'priority' => 'nullable|in:low,medium,high,urgent',
+            'scheduled_at' => 'required|date',
+            'assigned_to' => 'nullable|exists:users,id',
+        ]);
+
+        $followUp = FollowUp::create([
+            'company_id' => $companyId ?? $lead->company_id,
+            'lead_id' => $lead->id,
+            'created_by' => $user->id,
+            'assigned_to' => $validated['assigned_to'] ?? $user->id,
+            'title' => $validated['title'],
+            'notes' => $validated['notes'] ?? null,
+            'type' => $validated['type'],
+            'priority' => $validated['priority'] ?? 'medium',
+            'status' => 'scheduled',
+            'scheduled_at' => $validated['scheduled_at'],
+        ]);
+
+        return response()->json($followUp->load(['creator', 'assignee', 'lead']), 201);
+    }
+
+    /**
      * Get upcoming follow-ups for the authenticated user.
      */
     public function upcoming(Request $request)
@@ -209,7 +312,7 @@ class FollowUpController extends Controller
                 $query->where('assigned_to', $user->id)
                       ->orWhere('created_by', $user->id);
             })
-            ->with(['customer', 'opportunity', 'creator', 'assignee'])
+            ->with(['customer', 'lead', 'opportunity', 'creator', 'assignee'])
             ->orderBy('scheduled_at', 'asc')
             ->get();
 

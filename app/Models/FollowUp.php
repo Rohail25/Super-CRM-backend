@@ -24,6 +24,7 @@ class FollowUp extends Model
     protected $fillable = [
         'company_id',
         'customer_id',
+        'lead_id',
         'opportunity_id',
         'created_by',
         'assigned_to',
@@ -53,6 +54,11 @@ class FollowUp extends Model
     public function customer(): BelongsTo
     {
         return $this->belongsTo(Customer::class);
+    }
+
+    public function lead(): BelongsTo
+    {
+        return $this->belongsTo(Lead::class);
     }
 
     public function opportunity(): BelongsTo
