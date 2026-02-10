@@ -62,7 +62,10 @@ class LeadController extends Controller
             $query->where('category', $request->category);
         }
 
-        $leads = $query->latest()->paginate($request->get('per_page', 15));
+        // Use explicit orderBy with index for better performance
+        // This prevents MySQL from sorting all rows before pagination
+        $leads = $query->orderBy('created_at', 'desc')
+                      ->paginate($request->get('per_page', 15));
 
         return response()->json($leads);
     }
