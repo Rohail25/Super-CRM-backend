@@ -22,6 +22,8 @@ use App\Http\Controllers\Api\SubscriptionController;
 use App\Http\Controllers\Api\FollowUpController;
 use App\Http\Controllers\Api\UserController;
 use App\Http\Controllers\Api\EmailController;
+use App\Http\Controllers\Api\CategoryController;
+use App\Http\Controllers\Api\MediaController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -82,7 +84,15 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/customers/merge', [CustomerController::class, 'merge']);
 
     // Leads
+    Route::get('/leads/export', [LeadController::class, 'export']);
     Route::apiResource('leads', LeadController::class);
+    
+    // Categories
+    Route::apiResource('categories', CategoryController::class);
+    
+    // Media Library
+    Route::get('/media', [MediaController::class, 'index']);
+    Route::post('/media/upload', [MediaController::class, 'upload']);
     
     // Email Bulk Management
     Route::get('/emails', [EmailController::class, 'index']);

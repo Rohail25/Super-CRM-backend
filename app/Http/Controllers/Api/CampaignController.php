@@ -149,23 +149,44 @@ class CampaignController extends Controller
                 }
             }
 
+            // Map new field names to old ones for backward compatibility
+            if ($request->has('title') && !$request->has('name')) {
+                $request->merge(['name' => $request->title]);
+            }
+            if ($request->has('startDate') && !$request->has('start_date')) {
+                $request->merge(['start_date' => $request->startDate]);
+            }
+            if ($request->has('endDate') && !$request->has('end_date')) {
+                $request->merge(['end_date' => $request->endDate]);
+            }
+            if ($request->has('targetLink') && !$request->has('target_link')) {
+                $request->merge(['target_link' => $request->targetLink]);
+            }
+            if ($request->has('price') && !$request->has('budget')) {
+                $request->merge(['budget' => $request->price]);
+            }
+
             // Validate the request
             $validated = $request->validate([
                 'project_id' => 'nullable|exists:projects,id',
                 'name' => 'required|string|max:255',
                 'description' => 'nullable|string',
                 'image' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:10240', // 10MB max
-                'target_link' => 'required|string|url|max:500',
+                'imageUrl' => 'nullable|string|url|max:1000',
+                'target_link' => 'nullable|string|url|max:500',
                 'type' => ['required', Rule::in(['BANNER_TOP', 'BANNER_SIDE', 'INLINE', 'FOOTER', 'SLIDER', 'TICKER', 'POPUP', 'STICKY'])],
-                'status' => ['sometimes', Rule::in(['draft', 'scheduled', 'active', 'paused', 'completed', 'cancelled'])],
+                'status' => ['sometimes', Rule::in(['pending', 'active', 'paused', 'expired', 'rejected'])],
                 'start_date' => 'nullable|date',
                 'end_date' => 'nullable|date|after:start_date',
                 'budget' => 'nullable|numeric|min:0',
+                'price' => 'nullable|numeric|min:0',
                 'currency' => 'nullable|string|size:3',
                 'target_audience' => 'nullable|array',
                 'target_criteria' => 'nullable|array',
                 'content_data' => 'nullable|array',
                 'settings' => 'nullable|array',
+                'displayName' => 'nullable|string|max:255',
+                'position' => 'nullable|string|max:255',
                 'track_clicks' => 'sometimes|boolean',
                 'track_opens' => 'sometimes|boolean',
             ]);
@@ -177,13 +198,12 @@ class CampaignController extends Controller
                 ], 403);
             }
             
-            // Handle image upload
+            // Handle image upload or imageUrl
             if ($request->hasFile('image')) {
                 try {
                     $image = $request->file('image');
                     $path = $image->store('campaigns/' . $user->company_id, 'public');
                     $validated['image_path'] = $path;
-                    
                 } catch (\Exception $e) {
                     Log::error('Failed to upload image', [
                         'error' => $e->getMessage(),
@@ -198,9 +218,28 @@ class CampaignController extends Controller
                         ],
                     ], 422);
                 }
+            } elseif ($request->has('imageUrl') && !empty($request->imageUrl)) {
+                // Handle imageUrl - extract path from URL or save URL
+                $imageUrl = $request->imageUrl;
+                
+                // If it's a local storage URL, extract the path
+                if (strpos($imageUrl, '/storage/') !== false) {
+                    $path = str_replace(url('/storage/'), '', $imageUrl);
+                    $path = ltrim($path, '/');
+                    // Verify the file exists
+                    if (Storage::disk('public')->exists($path)) {
+                        $validated['image_path'] = $path;
+                    } else {
+                        // If file doesn't exist, store the full URL in settings
+                        $validated['settings'] = array_merge($validated['settings'] ?? [], ['imageUrl' => $imageUrl]);
+                    }
+                } else {
+                    // External URL - store in settings
+                    $validated['settings'] = array_merge($validated['settings'] ?? [], ['imageUrl' => $imageUrl]);
+                }
             }
             
-            // Validate target_link URL format (required field, so it should always be present)
+            // Validate target_link URL format if provided
             if (isset($validated['target_link']) && !empty($validated['target_link'])) {
                 if (!filter_var($validated['target_link'], FILTER_VALIDATE_URL)) {
                     return response()->json([
@@ -211,6 +250,9 @@ class CampaignController extends Controller
                         ],
                     ], 422);
                 }
+            } else {
+                // If target_link is empty or not provided, set it to null
+                $validated['target_link'] = null;
             }
             
             // Handle target_link from settings JSON if sent that way (for backward compatibility)
@@ -225,10 +267,22 @@ class CampaignController extends Controller
                 }
             }
             
+            // Handle settings for displayName and position
+            $settings = $validated['settings'] ?? [];
+            if ($request->has('displayName')) {
+                $settings['displayName'] = $request->displayName;
+            }
+            if ($request->has('position')) {
+                $settings['position'] = $request->position;
+            }
+            if (!empty($settings)) {
+                $validated['settings'] = $settings;
+            }
+            
             $validated['company_id'] = $user->company_id;
             $validated['created_by'] = $user->id;
-            // Always set status to 'draft' (pending) when creating - admin will approve later
-            $validated['status'] = 'draft';
+            // Always set status to 'pending' when creating - admin will activate later
+            $validated['status'] = 'pending';
 
           
             $campaign = DB::transaction(function () use ($validated) {
@@ -332,6 +386,23 @@ class CampaignController extends Controller
                 }
             }
 
+            // Map new field names to old ones for backward compatibility
+            if ($request->has('title') && !$request->has('name')) {
+                $request->merge(['name' => $request->title]);
+            }
+            if ($request->has('startDate') && !$request->has('start_date')) {
+                $request->merge(['start_date' => $request->startDate]);
+            }
+            if ($request->has('endDate') && !$request->has('end_date')) {
+                $request->merge(['end_date' => $request->endDate]);
+            }
+            if ($request->has('targetLink') && !$request->has('target_link')) {
+                $request->merge(['target_link' => $request->targetLink]);
+            }
+            if ($request->has('price') && !$request->has('budget')) {
+                $request->merge(['budget' => $request->price]);
+            }
+            
             // Parse dates if they are strings
             if ($request->has('start_date') && is_string($request->start_date)) {
                 try {
@@ -364,20 +435,36 @@ class CampaignController extends Controller
                 'name' => 'sometimes|string|max:255',
                 'description' => 'nullable|string',
                 'image' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:10240', // 10MB max
+                'imageUrl' => 'nullable|string|url|max:1000',
                 'target_link' => 'nullable|string|url|max:500', // Optional for updates, but if provided must be valid URL
                 'type' => ['sometimes', Rule::in(['BANNER_TOP', 'BANNER_SIDE', 'INLINE', 'FOOTER', 'SLIDER', 'TICKER', 'POPUP', 'STICKY'])],
-                'status' => ['sometimes', Rule::in(['draft', 'scheduled', 'active', 'paused', 'completed', 'cancelled'])],
+                'status' => ['sometimes', Rule::in(['pending', 'active', 'paused', 'expired', 'rejected'])],
                 'start_date' => 'nullable|date',
                 'end_date' => 'nullable|date|after:start_date',
                 'budget' => 'nullable|numeric|min:0',
+                'price' => 'nullable|numeric|min:0',
                 'currency' => 'nullable|string|size:3',
                 'target_audience' => 'nullable|array',
                 'target_criteria' => 'nullable|array',
                 'content_data' => 'nullable|array',
                 'settings' => 'nullable|array',
+                'displayName' => 'nullable|string|max:255',
+                'position' => 'nullable|string|max:255',
                 'track_clicks' => 'sometimes|boolean',
                 'track_opens' => 'sometimes|boolean',
             ]);
+            
+            // Handle settings for displayName and position
+            $settings = $validated['settings'] ?? [];
+            if ($request->has('displayName')) {
+                $settings['displayName'] = $request->displayName;
+            }
+            if ($request->has('position')) {
+                $settings['position'] = $request->position;
+            }
+            if (!empty($settings)) {
+                $validated['settings'] = $settings;
+            }
 
             // Validate project access if project_id is being updated
             if (isset($validated['project_id']) && !$user->hasProjectAccess($validated['project_id'])) {
@@ -386,7 +473,7 @@ class CampaignController extends Controller
                 ], 403);
             }
 
-        // Handle image upload
+        // Handle image upload or imageUrl
         if ($request->hasFile('image')) {
             try {
                 // Delete old image if exists
@@ -405,6 +492,33 @@ class CampaignController extends Controller
                         'type' => 'ImageUploadError',
                     ],
                 ], 422);
+            }
+        } elseif ($request->has('imageUrl') && !empty($request->imageUrl)) {
+            // Handle imageUrl - extract path from URL or save URL
+            $imageUrl = $request->imageUrl;
+            
+            // If it's a local storage URL, extract the path
+            if (strpos($imageUrl, '/storage/') !== false) {
+                $path = str_replace(url('/storage/'), '', $imageUrl);
+                $path = ltrim($path, '/');
+                // Verify the file exists
+                if (Storage::disk('public')->exists($path)) {
+                    // Delete old image if exists
+                    if ($campaign->image_path && Storage::disk('public')->exists($campaign->image_path)) {
+                        Storage::disk('public')->delete($campaign->image_path);
+                    }
+                    $validated['image_path'] = $path;
+                } else {
+                    // If file doesn't exist, store the full URL in settings
+                    $settings = $validated['settings'] ?? [];
+                    $settings['imageUrl'] = $imageUrl;
+                    $validated['settings'] = $settings;
+                }
+            } else {
+                // External URL - store in settings
+                $settings = $validated['settings'] ?? [];
+                $settings['imageUrl'] = $imageUrl;
+                $validated['settings'] = $settings;
             }
         }
 
@@ -437,6 +551,8 @@ class CampaignController extends Controller
         }
 
         $oldValues = $campaign->getAttributes();
+        $oldStatus = $campaign->status;
+        $statusChanged = isset($validated['status']) && $validated['status'] !== $oldStatus;
 
         try {
             $campaign = DB::transaction(function () use ($campaign, $validated, $oldValues) {
@@ -450,6 +566,22 @@ class CampaignController extends Controller
                 $this->activityLogService->logUpdated($campaign, $oldValues, $campaign->getAttributes());
                 return $campaign;
             });
+
+            // If status changed and campaign has tg_calabria_ad_id, update in tg-calabria
+            if ($statusChanged && !empty($campaign->tg_calabria_ad_id)) {
+                try {
+                    // Refresh campaign to get latest data
+                    $campaign->refresh();
+                    $this->updateCampaignInTGCalabria($campaign, $user);
+                } catch (\Exception $e) {
+                    Log::error('Failed to update campaign in tg-calabria', [
+                        'campaign_id' => $campaign->id,
+                        'ad_id' => $campaign->tg_calabria_ad_id,
+                        'error' => $e->getMessage(),
+                    ]);
+                    // Don't fail the update, just log the error
+                }
+            }
 
             Log::info('Campaign updated successfully', [
                 'campaign_id' => $campaign->id,
@@ -691,9 +823,22 @@ class CampaignController extends Controller
         }
 
         // Validate required fields
-        if (!$campaign->name || !$campaign->type || !$campaign->image_path || !$campaign->budget || !$campaign->start_date || !$campaign->end_date) {
+        if (!$campaign->name || !$campaign->type || !$campaign->budget || !$campaign->start_date || !$campaign->end_date) {
             return response()->json([
                 'message' => 'Campaign is missing required fields for activation',
+            ], 400);
+        }
+
+        // Check if image_path or imageUrl exists
+        $hasImage = !empty($campaign->image_path);
+        if (!$hasImage && !empty($campaign->settings)) {
+            $settings = is_string($campaign->settings) ? json_decode($campaign->settings, true) : $campaign->settings;
+            $hasImage = isset($settings['imageUrl']) && !empty($settings['imageUrl']);
+        }
+
+        if (!$hasImage) {
+            return response()->json([
+                'message' => 'Campaign must have an image to activate',
             ], 400);
         }
 
@@ -735,10 +880,25 @@ class CampaignController extends Controller
             }
 
             // Step 2: Get image URL
-            $imageUrl = Storage::disk('public')->url($campaign->image_path);
-            // If the URL is relative, make it absolute
-            if (!filter_var($imageUrl, FILTER_VALIDATE_URL)) {
-                $imageUrl = url($imageUrl);
+            $imageUrl = null;
+            if (!empty($campaign->image_path)) {
+                $imageUrl = Storage::disk('public')->url($campaign->image_path);
+                // If the URL is relative, make it absolute
+                if (!filter_var($imageUrl, FILTER_VALIDATE_URL)) {
+                    $imageUrl = url($imageUrl);
+                }
+            } elseif (!empty($campaign->settings)) {
+                // Check settings for imageUrl
+                $settings = is_string($campaign->settings) ? json_decode($campaign->settings, true) : $campaign->settings;
+                if (isset($settings['imageUrl']) && !empty($settings['imageUrl'])) {
+                    $imageUrl = $settings['imageUrl'];
+                }
+            }
+
+            if (!$imageUrl) {
+                return response()->json([
+                    'message' => 'Campaign image URL is not available',
+                ], 400);
             }
 
             // Step 3: Create ad in external API
@@ -774,14 +934,35 @@ class CampaignController extends Controller
                 ], 400);
             }
             
-            // Determine position based on type
-            $position = 'BODY';
-            if ($campaign->type === 'BANNER_TOP') {
-                $position = 'HEADER';
-            } elseif ($campaign->type === 'FOOTER') {
-                $position = 'FOOTER';
-            } elseif (in_array($campaign->type, ['BANNER_SIDE', 'STICKY'])) {
-                $position = 'SIDEBAR';
+            // Get position from settings or determine based on type
+            $position = null;
+            if (!empty($campaign->settings)) {
+                $settings = is_string($campaign->settings) ? json_decode($campaign->settings, true) : $campaign->settings;
+                if (isset($settings['position']) && !empty($settings['position'])) {
+                    $position = $settings['position'];
+                }
+            }
+            
+            // If position not in settings, determine based on type
+            if (!$position) {
+                if ($campaign->type === 'BANNER_TOP') {
+                    $position = 'HEADER';
+                } elseif ($campaign->type === 'FOOTER') {
+                    $position = 'FOOTER';
+                } elseif (in_array($campaign->type, ['BANNER_SIDE', 'STICKY'])) {
+                    $position = 'SIDEBAR';
+                } else {
+                    $position = 'BODY';
+                }
+            }
+            
+            // Get displayName from settings
+            $displayName = null;
+            if (!empty($campaign->settings)) {
+                $settings = is_string($campaign->settings) ? json_decode($campaign->settings, true) : $campaign->settings;
+                if (isset($settings['displayName']) && !empty($settings['displayName'])) {
+                    $displayName = $settings['displayName'];
+                }
             }
             
             $adData = [
@@ -794,6 +975,11 @@ class CampaignController extends Controller
                 'endDate' => $endDateFormatted,
                 'price' => (float) $campaign->budget,
             ];
+            
+            // Add optional fields
+            if ($displayName) {
+                $adData['displayName'] = $displayName;
+            }
 
             $adResponse = Http::withHeaders([
                 'Authorization' => 'Bearer ' . $token,
@@ -829,13 +1015,20 @@ class CampaignController extends Controller
                 ], 500);
             }
 
-            // Update campaign status to active
-            $campaign->update(['status' => 'active']);
+            // Extract ad ID from response
+            $adResponseData = $adResponse->json();
+            $adId = $adResponseData['data']['id'] ?? $adResponseData['id'] ?? null;
+
+            // Update campaign status to active and store ad ID
+            $campaign->update([
+                'status' => 'active',
+                'tg_calabria_ad_id' => $adId,
+            ]);
 
             return response()->json([
                 'message' => 'Campaign activated successfully',
                 'campaign' => $campaign->load(['creator', 'project']),
-                'ad_response' => $adResponse->json(),
+                'ad_response' => $adResponseData,
             ]);
         } catch (\Exception $e) {
             return $this->errorResponse(
@@ -845,5 +1038,114 @@ class CampaignController extends Controller
                 ['campaign_id' => $campaign->id]
             );
         }
+    }
+
+    /**
+     * Update campaign in tg-calabria via PATCH request
+     */
+    private function updateCampaignInTGCalabria(Campaign $campaign, $user)
+    {
+        if (empty($campaign->tg_calabria_ad_id)) {
+            return;
+        }
+
+        // Login to external API
+        $loginResponse = Http::post('https://api.tgcalabriareport.com/api/v1/auth/login', [
+            'email' => 'admin@gmail.com',
+            'password' => '11221122',
+        ]);
+
+        if (!$loginResponse->successful()) {
+            throw new \Exception('Failed to authenticate with external API');
+        }
+
+        $loginData = $loginResponse->json();
+        $token = $loginData['data']['token'] ?? 
+                 $loginData['token'] ?? 
+                 $loginData['access_token'] ?? 
+                 ($loginData['data']['access_token'] ?? null);
+
+        if (!$token) {
+            throw new \Exception('Failed to get authentication token');
+        }
+
+        // Get image URL
+        $imageUrl = null;
+        if (!empty($campaign->image_path)) {
+            $imageUrl = Storage::disk('public')->url($campaign->image_path);
+            if (!filter_var($imageUrl, FILTER_VALIDATE_URL)) {
+                $imageUrl = url($imageUrl);
+            }
+        } elseif (!empty($campaign->settings)) {
+            $settings = is_string($campaign->settings) ? json_decode($campaign->settings, true) : $campaign->settings;
+            if (isset($settings['imageUrl']) && !empty($settings['imageUrl'])) {
+                $imageUrl = $settings['imageUrl'];
+            }
+        }
+
+        // Get position from settings
+        $position = null;
+        if (!empty($campaign->settings)) {
+            $settings = is_string($campaign->settings) ? json_decode($campaign->settings, true) : $campaign->settings;
+            if (isset($settings['position']) && !empty($settings['position'])) {
+                $position = $settings['position'];
+            }
+        }
+
+        // Map status to tg-calabria status (direct mapping)
+        $statusMap = [
+            'pending' => 'PENDING',
+            'active' => 'ACTIVE',
+            'paused' => 'PAUSED',
+            'expired' => 'EXPIRED',
+            'rejected' => 'REJECTED',
+        ];
+        $tgStatus = $statusMap[$campaign->status] ?? 'PENDING';
+
+        // Format dates
+        $startDate = $campaign->start_date instanceof \Carbon\Carbon 
+            ? $campaign->start_date->utc() 
+            : \Carbon\Carbon::parse($campaign->start_date)->utc();
+        $endDate = $campaign->end_date instanceof \Carbon\Carbon 
+            ? $campaign->end_date->utc() 
+            : \Carbon\Carbon::parse($campaign->end_date)->utc();
+        
+        $startDateFormatted = $startDate->format('Y-m-d\TH:i:s.v') . 'Z';
+        $endDateFormatted = $endDate->format('Y-m-d\TH:i:s.v') . 'Z';
+
+        // Prepare payload
+        $payload = [
+            'title' => $campaign->name,
+            'imageUrl' => $imageUrl,
+            'targetLink' => $campaign->target_link,
+            'position' => $position,
+            'startDate' => $startDateFormatted,
+            'endDate' => $endDateFormatted,
+            'price' => (float) ($campaign->budget ?? 0),
+            'status' => $tgStatus,
+        ];
+
+        // Remove null values
+        $payload = array_filter($payload, function($value) {
+            return $value !== null;
+        });
+
+        // Call PATCH endpoint
+        $updateResponse = Http::withHeaders([
+            'Authorization' => 'Bearer ' . $token,
+            'Content-Type' => 'application/json',
+            'Accept' => 'application/json',
+        ])->patch('https://api.tgcalabriareport.com/api/v1/ads/' . $campaign->tg_calabria_ad_id, $payload);
+
+        if (!$updateResponse->successful()) {
+            $errorData = $updateResponse->json();
+            throw new \Exception('Failed to update ad in tg-calabria: ' . ($errorData['message'] ?? 'Unknown error'));
+        }
+
+        Log::info('Campaign updated in tg-calabria', [
+            'campaign_id' => $campaign->id,
+            'ad_id' => $campaign->tg_calabria_ad_id,
+            'status' => $tgStatus,
+        ]);
     }
 }

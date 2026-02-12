@@ -93,7 +93,7 @@ class LeadController extends Controller
 
         $request->validate([
             'file' => 'required|file|mimes:csv,txt,xlsx,xls',
-            'category' => 'required|string|in:Hotel,B&B,Farmacia,Oculista,Ortopedico,Aziende vinicole,Salumificio,Doctors, baby hotel, etc.',
+            'category' => 'required|string|max:255',
             'format' => 'required|string|in:csv,excel',
         ]);
 
@@ -341,5 +341,92 @@ class LeadController extends Controller
         $lead->delete();
 
         return response()->json(['message' => 'Lead deleted successfully'], 204);
+    }
+
+    /**
+     * Export leads to CSV
+     */
+    public function export(Request $request)
+    {
+        $user = $request->user();
+        $companyId = $user->isSuperAdmin() && $request->has('company_id')
+            ? $request->company_id
+            : ($user->company_id ?? null);
+
+        // Build query based on company_id (same as index method)
+        if ($user->isSuperAdmin() && !$request->has('company_id')) {
+            $query = Lead::query();
+        } elseif ($companyId === null) {
+            $query = Lead::whereNull('company_id');
+        } else {
+            $query = Lead::where('company_id', $companyId);
+        }
+
+        // Apply filters (same as index method)
+        if ($request->has('search') && $request->search) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('email', 'like', "%{$search}%")
+                    ->orWhere('phone', 'like', "%{$search}%")
+                    ->orWhere('name', 'like', "%{$search}%")
+                    ->orWhere('file_name', 'like', "%{$search}%");
+            });
+        }
+
+        if ($request->has('status') && $request->status !== 'all') {
+            $query->where('status', $request->status);
+        }
+
+        if ($request->has('source') && $request->source !== 'all') {
+            $query->where('source', $request->source);
+        }
+
+        if ($request->has('category') && $request->category !== 'all') {
+            $query->where('category', $request->category);
+        }
+
+        // Get all leads (no pagination for export)
+        $leads = $query->orderBy('created_at', 'desc')->get();
+
+        // Prepare CSV data
+        $csvData = [];
+        $headers = ['ID', 'Name', 'Email', 'Phone', 'Source', 'Status', 'Category', 'File Name', 'Assigned To', 'Value', 'Created At'];
+        $csvData[] = $headers;
+
+        foreach ($leads as $lead) {
+            $row = [
+                $lead->id,
+                $lead->name ?? '',
+                $lead->email ?? '',
+                $lead->phone ?? '',
+                $lead->source ?? '',
+                $lead->status ?? '',
+                $lead->category ?? '',
+                $lead->file_name ?? '',
+                $lead->assigned_to ?? '',
+                $lead->value ?? '',
+                $lead->created_at ? $lead->created_at->format('Y-m-d H:i:s') : '',
+            ];
+            $csvData[] = $row;
+        }
+
+        // Generate CSV content
+        $filename = 'leads_export_' . date('Y-m-d_His') . '.csv';
+        $handle = fopen('php://temp', 'r+');
+        
+        // Add BOM for UTF-8
+        fwrite($handle, "\xEF\xBB\xBF");
+        
+        foreach ($csvData as $row) {
+            fputcsv($handle, $row);
+        }
+        
+        rewind($handle);
+        $csvContent = stream_get_contents($handle);
+        fclose($handle);
+
+        return response($csvContent)
+            ->header('Content-Type', 'text/csv; charset=UTF-8')
+            ->header('Content-Disposition', 'attachment; filename="' . $filename . '"');
     }
 }

@@ -41,6 +41,7 @@ class Campaign extends Model
         'payment_status',
         'stripe_payment_intent_id',
         'stripe_checkout_session_id',
+        'tg_calabria_ad_id',
         'target_audience',
         'target_criteria',
         'subject',

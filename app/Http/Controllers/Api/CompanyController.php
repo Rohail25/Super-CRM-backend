@@ -36,7 +36,7 @@ class CompanyController extends Controller
                     ->orWhere('vat', 'like', "%{$search}%");
             });
         }
-
+        $query->orderBy('created_at', 'desc');
         $companies = $query->with('users', 'projectAccesses.project')
             ->paginate($request->get('per_page', 15));
 

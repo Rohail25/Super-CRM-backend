@@ -54,7 +54,7 @@ class EmailController extends Controller
     {
         $validated = $request->validate([
             'file' => 'required|file|mimes:csv,txt,xlsx,xls',
-            'category' => 'required|string|in:Hotel,B&B,Farmacia,Oculista,Ortopedico,Aziende vinicole,Salumificio,Doctors,Baby Hotel',
+            'category' => 'required|string|max:255',
         ]);
 
         $file = $request->file('file');
@@ -69,7 +69,9 @@ class EmailController extends Controller
                 'total_rows' => $results['total'],
                 'successful' => $results['successful'],
                 'failed' => $results['failed'],
+                'skipped' => $results['skipped'] ?? 0,
                 'errors' => $results['errors'],
+                'skipped_emails' => $results['skipped_emails'] ?? [],
             ], 201);
 
         } catch (\Exception $e) {
@@ -88,7 +90,9 @@ class EmailController extends Controller
         $total = 0;
         $successful = 0;
         $failed = 0;
+        $skipped = 0;
         $errors = [];
+        $skippedEmails = [];
 
         if (in_array($extension, ['csv', 'txt'])) {
             $data = $this->parseCsvOrTxt($file);
@@ -99,6 +103,9 @@ class EmailController extends Controller
         }
 
         $hasHeaders = isset($data['headers']) && !empty($data['headers']);
+        
+        // Collect all email addresses first for batch checking
+        $allEmails = [];
         
         if ($hasHeaders) {
             // CASE A: File has headers
@@ -117,7 +124,52 @@ class EmailController extends Controller
                 throw new \Exception('Email column not found in file headers. Please ensure your file has an "email" column.');
             }
 
-            // Process each record
+            // First pass: collect all valid emails
+            foreach ($data['records'] as $rowIndex => $record) {
+                if (!isset($record[$emailColumnIndex])) {
+                    continue;
+                }
+                
+                $emailValue = trim($record[$emailColumnIndex]);
+                if (!empty($emailValue) && filter_var($emailValue, FILTER_VALIDATE_EMAIL)) {
+                    $allEmails[] = strtolower($emailValue);
+                }
+            }
+        } else {
+            // CASE B: File has no headers
+            foreach ($data['records'] as $rowIndex => $record) {
+                $emailValue = is_array($record) ? trim($record[0] ?? '') : trim($record);
+                if (!empty($emailValue) && filter_var($emailValue, FILTER_VALIDATE_EMAIL)) {
+                    $allEmails[] = strtolower($emailValue);
+                }
+            }
+        }
+
+        // Batch check for existing emails - get all existing emails from database
+        $existingEmails = [];
+        if (!empty($allEmails)) {
+            // Get all emails from database and extract email addresses
+            $allEmailRecords = Email::select('row_data_json')->get();
+            foreach ($allEmailRecords as $emailRecord) {
+                $emailData = $emailRecord->row_data_json;
+                if (is_array($emailData) && isset($emailData['email'])) {
+                    $existingEmails[] = strtolower(trim($emailData['email']));
+                }
+            }
+            $existingEmails = array_unique($existingEmails);
+        }
+
+        // Process each record
+        if ($hasHeaders) {
+            $headers = $data['headers'];
+            $emailColumnIndex = null;
+            foreach ($headers as $index => $header) {
+                if (strtolower(trim($header)) === 'email') {
+                    $emailColumnIndex = $index;
+                    break;
+                }
+            }
+
             foreach ($data['records'] as $rowIndex => $record) {
                 $total++;
                 
@@ -134,6 +186,14 @@ class EmailController extends Controller
                 if (empty($emailValue) || !filter_var($emailValue, FILTER_VALIDATE_EMAIL)) {
                     $failed++;
                     $errors[] = "Row " . ($rowIndex + 2) . ": Invalid email format: " . $emailValue;
+                    continue;
+                }
+
+                // Check if email already exists (case-insensitive)
+                $emailLower = strtolower($emailValue);
+                if (in_array($emailLower, $existingEmails)) {
+                    $skipped++;
+                    $skippedEmails[] = "Row " . ($rowIndex + 2) . ": Email already exists - " . $emailValue;
                     continue;
                 }
 
@@ -180,6 +240,14 @@ class EmailController extends Controller
                     continue;
                 }
 
+                // Check if email already exists (case-insensitive)
+                $emailLower = strtolower($emailValue);
+                if (in_array($emailLower, $existingEmails)) {
+                    $skipped++;
+                    $skippedEmails[] = "Row " . ($rowIndex + 1) . ": Email already exists - " . $emailValue;
+                    continue;
+                }
+
                 try {
                     Email::create([
                         'category' => $category,
@@ -203,7 +271,9 @@ class EmailController extends Controller
             'total' => $total,
             'successful' => $successful,
             'failed' => $failed,
+            'skipped' => $skipped,
             'errors' => array_slice($errors, 0, 50), // Limit errors to first 50
+            'skipped_emails' => array_slice($skippedEmails, 0, 100), // Limit skipped emails to first 100
         ];
     }
 
