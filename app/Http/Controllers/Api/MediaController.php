@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\Traits\HandlesApiErrors;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\File;
 
 class MediaController extends Controller
 {
@@ -19,13 +20,94 @@ class MediaController extends Controller
     {
         $user = $request->user();
         
-        $validated = $request->validate([
-            'file' => 'required|file|mimes:jpeg,png,jpg,gif,webp,mp4,webm,ogg,mov,avi|max:51200', // 50MB max for videos
-        ]);
+        // Check if file was actually uploaded
+        if (!$request->hasFile('file')) {
+            Log::error('Media upload failed: No file in request', [
+                'user_id' => $user->id,
+                'request_keys' => array_keys($request->all()),
+                'php_upload_errors' => [
+                    'upload_max_filesize' => ini_get('upload_max_filesize'),
+                    'post_max_size' => ini_get('post_max_size'),
+                    'max_file_uploads' => ini_get('max_file_uploads'),
+                ],
+            ]);
+            
+            return response()->json([
+                'message' => 'No file was uploaded. Please check file size limits and try again.',
+                'errors' => [
+                    'file' => [
+                        'The file failed to upload. This may be due to file size limits or server configuration.',
+                    ],
+                ],
+                'server_limits' => [
+                    'upload_max_filesize' => ini_get('upload_max_filesize'),
+                    'post_max_size' => ini_get('post_max_size'),
+                    'max_file_uploads' => ini_get('max_file_uploads'),
+                ],
+            ], 422);
+        }
+
+        try {
+            $validated = $request->validate([
+                'file' => 'required|file|mimes:jpeg,png,jpg,gif,webp,mp4,webm,ogg,mov,avi|max:51200', // 50MB max for videos
+            ]);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            Log::error('Media upload validation failed', [
+                'user_id' => $user->id,
+                'errors' => $e->errors(),
+                'file_info' => $request->hasFile('file') ? [
+                    'name' => $request->file('file')->getClientOriginalName(),
+                    'size' => $request->file('file')->getSize(),
+                    'mime' => $request->file('file')->getMimeType(),
+                ] : null,
+            ]);
+            
+            return response()->json([
+                'message' => 'File validation failed.',
+                'errors' => $e->errors(),
+            ], 422);
+        }
 
         try {
             $file = $request->file('file');
+            
+            // Check if storage directory is writable
+            $storagePath = storage_path('app/public/media/' . ($user->company_id ?? 'general'));
+            if (!is_dir($storagePath)) {
+                File::makeDirectory($storagePath, 0755, true);
+            }
+            
+            if (!is_writable($storagePath)) {
+                Log::error('Media upload failed: Storage directory not writable', [
+                    'user_id' => $user->id,
+                    'path' => $storagePath,
+                    'permissions' => substr(sprintf('%o', fileperms($storagePath)), -4),
+                ]);
+                
+                return response()->json([
+                    'message' => 'Storage directory is not writable. Please contact administrator.',
+                    'errors' => [
+                        'file' => ['The file failed to upload due to server configuration.'],
+                    ],
+                ], 500);
+            }
+            
             $path = $file->store('media/' . ($user->company_id ?? 'general'), 'public');
+            
+            if (!$path) {
+                Log::error('Media upload failed: File store returned false', [
+                    'user_id' => $user->id,
+                    'file_name' => $file->getClientOriginalName(),
+                    'file_size' => $file->getSize(),
+                ]);
+                
+                return response()->json([
+                    'message' => 'Failed to save file to storage.',
+                    'errors' => [
+                        'file' => ['The file failed to upload.'],
+                    ],
+                ], 500);
+            }
             
             // Generate full URL - ensure it's always absolute
             $imageUrl = Storage::disk('public')->url($path);
@@ -63,10 +145,28 @@ class MediaController extends Controller
         } catch (\Exception $e) {
             Log::error('Media upload failed', [
                 'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
                 'user_id' => $user->id,
+                'file_info' => $request->hasFile('file') ? [
+                    'name' => $request->file('file')->getClientOriginalName(),
+                    'size' => $request->file('file')->getSize(),
+                    'mime' => $request->file('file')->getMimeType(),
+                ] : null,
+                'php_limits' => [
+                    'upload_max_filesize' => ini_get('upload_max_filesize'),
+                    'post_max_size' => ini_get('post_max_size'),
+                    'memory_limit' => ini_get('memory_limit'),
+                    'max_execution_time' => ini_get('max_execution_time'),
+                ],
             ]);
+            
             return response()->json([
-                'message' => 'Failed to upload media: ' . $e->getMessage(),
+                'message' => 'The file failed to upload.',
+                'errors' => [
+                    'file' => [
+                        'The file failed to upload. Error: ' . $e->getMessage(),
+                    ],
+                ],
             ], 500);
         }
     }
