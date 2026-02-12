@@ -157,9 +157,9 @@ class EmailController extends Controller
                 }
             }
             $existingEmails = array_unique($existingEmails);
-        }
+            }
 
-        // Process each record
+            // Process each record
         if ($hasHeaders) {
             $headers = $data['headers'];
             $emailColumnIndex = null;

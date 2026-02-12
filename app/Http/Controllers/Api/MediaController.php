@@ -27,9 +27,16 @@ class MediaController extends Controller
             $file = $request->file('file');
             $path = $file->store('media/' . ($user->company_id ?? 'general'), 'public');
             
-            // Generate full URL
+            // Generate full URL - ensure it's always absolute
             $imageUrl = Storage::disk('public')->url($path);
-            // If the URL is relative, make it absolute
+            
+            // If the URL is relative (starts with /storage), make it absolute using APP_URL
+            if (strpos($imageUrl, '/') === 0 && !filter_var($imageUrl, FILTER_VALIDATE_URL)) {
+                $baseUrl = rtrim(config('app.url'), '/');
+                $imageUrl = $baseUrl . $imageUrl;
+            }
+            
+            // Final check: if still not a valid URL, use url() helper
             if (!filter_var($imageUrl, FILTER_VALIDATE_URL)) {
                 $imageUrl = url($imageUrl);
             }
@@ -95,7 +102,14 @@ class MediaController extends Controller
                         // Check if file exists before adding to list
                         if (Storage::disk('public')->exists($campaign->image_path)) {
                             $imageUrl = Storage::disk('public')->url($campaign->image_path);
-                            // If the URL is relative, make it absolute
+                            
+                            // If the URL is relative (starts with /storage), make it absolute using APP_URL
+                            if (strpos($imageUrl, '/') === 0 && !filter_var($imageUrl, FILTER_VALIDATE_URL)) {
+                                $baseUrl = rtrim(config('app.url'), '/');
+                                $imageUrl = $baseUrl . $imageUrl;
+                            }
+                            
+                            // Final check: if still not a valid URL, use url() helper
                             if (!filter_var($imageUrl, FILTER_VALIDATE_URL)) {
                                 $imageUrl = url($imageUrl);
                             }
@@ -156,7 +170,14 @@ class MediaController extends Controller
                             $isVideo = $mimeType && strpos($mimeType, 'video/') === 0;
                             
                             $imageUrl = Storage::disk('public')->url($file);
-                            // If the URL is relative, make it absolute
+                            
+                            // If the URL is relative (starts with /storage), make it absolute using APP_URL
+                            if (strpos($imageUrl, '/') === 0 && !filter_var($imageUrl, FILTER_VALIDATE_URL)) {
+                                $baseUrl = rtrim(config('app.url'), '/');
+                                $imageUrl = $baseUrl . $imageUrl;
+                            }
+                            
+                            // Final check: if still not a valid URL, use url() helper
                             if (!filter_var($imageUrl, FILTER_VALIDATE_URL)) {
                                 $imageUrl = url($imageUrl);
                             }

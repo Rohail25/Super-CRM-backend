@@ -23,7 +23,7 @@ class CategoryController extends Controller
         // Super admin can filter by company_id
         if ($user->isSuperAdmin() && $request->has('company_id')) {
             $query->where('company_id', $request->company_id);
-        }
+    }
 
         // Search by name
         if ($request->has('search') && $request->search) {

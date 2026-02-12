@@ -402,7 +402,7 @@ class CampaignController extends Controller
             if ($request->has('price') && !$request->has('budget')) {
                 $request->merge(['budget' => $request->price]);
             }
-            
+
             // Parse dates if they are strings
             if ($request->has('start_date') && is_string($request->start_date)) {
                 try {
@@ -882,10 +882,10 @@ class CampaignController extends Controller
             // Step 2: Get image URL
             $imageUrl = null;
             if (!empty($campaign->image_path)) {
-                $imageUrl = Storage::disk('public')->url($campaign->image_path);
-                // If the URL is relative, make it absolute
-                if (!filter_var($imageUrl, FILTER_VALIDATE_URL)) {
-                    $imageUrl = url($imageUrl);
+            $imageUrl = Storage::disk('public')->url($campaign->image_path);
+            // If the URL is relative, make it absolute
+            if (!filter_var($imageUrl, FILTER_VALIDATE_URL)) {
+                $imageUrl = url($imageUrl);
                 }
             } elseif (!empty($campaign->settings)) {
                 // Check settings for imageUrl
@@ -945,12 +945,12 @@ class CampaignController extends Controller
             
             // If position not in settings, determine based on type
             if (!$position) {
-                if ($campaign->type === 'BANNER_TOP') {
-                    $position = 'HEADER';
-                } elseif ($campaign->type === 'FOOTER') {
-                    $position = 'FOOTER';
-                } elseif (in_array($campaign->type, ['BANNER_SIDE', 'STICKY'])) {
-                    $position = 'SIDEBAR';
+            if ($campaign->type === 'BANNER_TOP') {
+                $position = 'HEADER';
+            } elseif ($campaign->type === 'FOOTER') {
+                $position = 'FOOTER';
+            } elseif (in_array($campaign->type, ['BANNER_SIDE', 'STICKY'])) {
+                $position = 'SIDEBAR';
                 } else {
                     $position = 'BODY';
                 }
