@@ -3,7 +3,6 @@
 namespace App\Services;
 
 use App\Models\Call;
-use App\Models\Company;
 use Illuminate\Support\Facades\Log;
 use Twilio\Rest\Client;
 use Twilio\Exceptions\TwilioException;
@@ -13,7 +12,6 @@ class TwilioService
     private ?Client $client;
     private string $phoneNumber;
     private string $whatsAppNumber;
-    private ?string $agentPhoneNumber;
 
     public function __construct()
     {
@@ -21,7 +19,6 @@ class TwilioService
         $authToken = config('services.twilio.auth_token');
         $this->phoneNumber = config('services.twilio.phone_number', '');
         $this->whatsAppNumber = config('services.twilio.whatsapp_number', $this->phoneNumber);
-        $this->agentPhoneNumber = config('services.twilio.agent_phone_number') ?: null;
 
         if (empty($accountSid) || empty($authToken)) {
             Log::warning('Twilio credentials not configured');
@@ -32,34 +29,21 @@ class TwilioService
     }
 
     /**
-     * Initiate an outbound call using click-to-call flow.
-     * This calls the agent first, then connects to the customer when agent answers.
+     * Initiate a direct call to the customer.
+     * This calls the customer directly (no agent in between).
      * 
      * @param Call $call The call record
      * @param string $customerPhoneNumber The customer's phone number to dial
-     * @param string|null $agentPhoneNumber Optional agent phone (defaults to config)
      * @param string|null $fromPhoneNumber Optional from number (defaults to Twilio number)
      */
-    public function initiateCall(Call $call, string $customerPhoneNumber, ?string $agentPhoneNumber = null, ?string $fromPhoneNumber = null): array
+    public function initiateCall(Call $call, string $customerPhoneNumber, ?string $fromPhoneNumber = null): array
     {
         if (!$this->client) {
             throw new \RuntimeException('Twilio is not configured. Please set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_PHONE_NUMBER in your .env file.');
         }
 
-        // Use agent phone from parameter, config, or throw error
-        $agentPhone = $agentPhoneNumber ?? $this->agentPhoneNumber;
-        if (empty($agentPhone)) {
-            throw new \RuntimeException(
-                'Agent phone number is required for click-to-call. ' .
-                'Please set TWILIO_AGENT_PHONE_NUMBER in your .env file. ' .
-                'This is the phone number that will ring when you click "Call Now".'
-            );
-        }
-
-        // Store customer phone in call record so TwiML can dial it
-        if (!$call->contact_phone) {
-            $call->update(['contact_phone' => $customerPhoneNumber]);
-        }
+        // Store customer phone in call record
+        $call->update(['contact_phone' => $customerPhoneNumber]);
 
         $fromNumber = $fromPhoneNumber ?? $this->phoneNumber;
         
@@ -81,27 +65,95 @@ class TwilioService
             $webhookBaseUrl = str_replace('http://', 'https://', $webhookBaseUrl);
         }
         
-        // Remove trailing slash
-        $webhookBaseUrl = rtrim($webhookBaseUrl, '/');
-        
+        // Remove trailing slash and trim any whitespace
+        $webhookBaseUrl = trim(rtrim($webhookBaseUrl, '/'));
+
         // Webhook URL for call status updates
         $statusCallbackUrl = $webhookBaseUrl . '/api/calls/twilio/status';
-        
-        // TwiML URL for call instructions (will dial customer when agent answers)
-        $twimlUrl = $webhookBaseUrl . '/api/calls/twilio/twiml?call_id=' . $call->id;
+
+        // Normalize customer phone number to E.164 format
+        $customerPhone = preg_replace('/[^0-9+]/', '', $customerPhoneNumber);
+        if (!str_starts_with($customerPhone, '+')) {
+            $customerPhone = '+' . $customerPhone;
+        }
+
+        Log::info('Twilio direct call configuration', [
+            'call_id' => $call->id,
+            'customer_phone' => $customerPhone,
+            'from_number' => $fromNumber,
+            'status_callback_url' => $statusCallbackUrl,
+        ]);
 
         try {
-            // Click-to-call: Call the AGENT first (not the customer)
-            // When agent answers, TwiML will dial the customer
+            // Verify Twilio number (Caller ID) is active before making call
+            try {
+                $phoneNumbers = $this->client->incomingPhoneNumbers->read([
+                    'phoneNumber' => $fromNumber
+                ], 1);
+                
+                if (empty($phoneNumbers)) {
+                    Log::warning('Twilio number (Caller ID) not found or may be released', [
+                        'phone_number' => $fromNumber,
+                        'message' => 'This number cannot be used as Caller ID. Please purchase an active number.',
+                    ]);
+                    throw new \RuntimeException(
+                        "Twilio number {$fromNumber} is not active or has been released. " .
+                        "Please purchase an active number from Twilio Console and update TWILIO_PHONE_NUMBER in your .env file."
+                    );
+                } else {
+                    $phoneNumber = $phoneNumbers[0];
+                    // Capabilities is an object, not an array
+                    $capabilities = $phoneNumber->capabilities;
+                    Log::info('Twilio number (Caller ID) verified', [
+                        'phone_number' => $fromNumber,
+                        'status' => $phoneNumber->status,
+                        'capabilities' => [
+                            'voice' => $capabilities->voice ?? false,
+                            'sms' => $capabilities->sms ?? false,
+                        ],
+                    ]);
+                }
+            } catch (TwilioException $e) {
+                if (str_contains($e->getMessage(), 'not found') || str_contains($e->getMessage(), 'released')) {
+                    throw new \RuntimeException(
+                        "Twilio number {$fromNumber} is not active or has been released. " .
+                        "Please purchase an active number from Twilio Console and update TWILIO_PHONE_NUMBER in your .env file."
+                    );
+                }
+                Log::warning('Could not verify Twilio number status', [
+                    'phone_number' => $fromNumber,
+                    'error' => $e->getMessage(),
+                ]);
+                // Continue anyway - Twilio will return an error if number is invalid
+            }
+            
+            // DIRECT CALL: Call the customer directly
+            // Twilio requires either 'url' or 'twiml' parameter for call instructions
+            // For direct calls, we use a simple TwiML that connects immediately
+            // The 'to' parameter is the customer's phone - they receive the call
+            // The 'from' parameter is your Caller ID - what appears on customer's phone
+            
+            // Simple TwiML for direct connection (no agent, no dialing - just connect)
+            // Using <Say> to announce, then <Hangup> - but actually we want to connect
+            // For a direct call, we can use a minimal TwiML or point to a URL
+            // Since we want direct connection, we'll use a simple TwiML endpoint URL
+            $twimlUrl = $webhookBaseUrl . '/api/calls/twilio/twiml';
+            
+            Log::info('Creating direct call to customer', [
+                'to' => $customerPhone,
+                'from' => $fromNumber,
+                'twiml_url' => $twimlUrl,
+            ]);
+            
             $twilioCall = $this->client->calls->create(
-                $agentPhone,    // To: Agent's phone (will ring first)
-                $fromNumber,    // From: Your Twilio number
+                $customerPhone,  // To: Customer's phone (they receive the call)
+                $fromNumber,      // From: Your Twilio number (Caller ID)
                 [
-                    'url' => $twimlUrl,  // TwiML that dials customer when agent answers
+                    'url' => $twimlUrl,  // URL to TwiML endpoint - required by Twilio
                     'statusCallback' => $statusCallbackUrl,
                     'statusCallbackEvent' => ['initiated', 'ringing', 'answered', 'completed'],
                     'statusCallbackMethod' => 'POST',
-                    'record' => true, // Record the call
+                    'record' => false, // Set to false to avoid recording issues
                 ]
             );
 
@@ -121,8 +173,7 @@ class TwilioService
         } catch (TwilioException $e) {
             Log::error('Twilio call initiation failed', [
                 'call_id' => $call->id,
-                'agent_phone' => $agentPhone,
-                'customer_phone' => $customerPhoneNumber,
+                'customer_phone' => $customerPhone,
                 'error' => $e->getMessage(),
             ]);
 
@@ -162,46 +213,6 @@ class TwilioService
             ]);
             return null;
         }
-    }
-
-    /**
-     * Generate TwiML for the call.
-     * 
-     * @param string|null $phoneNumber The phone number to dial (in E.164 format)
-     * @param string $message Optional message to play before connecting
-     */
-    public function generateTwiML(?string $phoneNumber = null, string $message = 'Connecting your call.'): string
-    {
-        $twiml = '<?xml version="1.0" encoding="UTF-8"?>';
-        $twiml .= '<Response>';
-        
-        // Play a brief message if provided
-        if ($message) {
-            $twiml .= '<Say voice="alice">' . htmlspecialchars($message) . '</Say>';
-            $twiml .= '<Pause length="1"/>';
-        }
-        
-        // Dial the customer's number if provided
-        if ($phoneNumber) {
-            // Ensure number is in E.164 format (remove any spaces, dashes, etc.)
-            $phoneNumber = preg_replace('/[^0-9+]/', '', $phoneNumber);
-            
-            // Add + if not present (assuming it's a valid number)
-            if (!str_starts_with($phoneNumber, '+')) {
-                $phoneNumber = '+' . $phoneNumber;
-            }
-            
-            $twiml .= '<Dial>';
-            $twiml .= '<Number>' . htmlspecialchars($phoneNumber) . '</Number>';
-            $twiml .= '</Dial>';
-        } else {
-            // Fallback if no number provided
-            $twiml .= '<Say voice="alice">No phone number available to dial.</Say>';
-        }
-        
-        $twiml .= '</Response>';
-        
-        return $twiml;
     }
 
     /**

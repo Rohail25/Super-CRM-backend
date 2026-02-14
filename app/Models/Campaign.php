@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\Storage;
 
 class Campaign extends Model
 {
@@ -64,6 +65,8 @@ class Campaign extends Model
         'roi',
     ];
 
+    protected $appends = ['image_url'];
+
     protected function casts(): array
     {
         return [
@@ -84,6 +87,50 @@ class Campaign extends Model
             'conversion_rate' => 'decimal:2',
             'roi' => 'decimal:2',
         ];
+    }
+
+    /**
+     * Get the full URL for the campaign image.
+     *
+     * @return string|null
+     */
+    public function getImageUrlAttribute(): ?string
+    {
+        if (empty($this->image_path)) {
+            // Check settings for imageUrl as fallback
+            if (!empty($this->settings) && is_array($this->settings) && isset($this->settings['imageUrl'])) {
+                return $this->settings['imageUrl'];
+            }
+            return null;
+        }
+
+        // Check if file exists in storage
+        if (!Storage::disk('public')->exists($this->image_path)) {
+            // If file doesn't exist, check settings for imageUrl
+            if (!empty($this->settings) && is_array($this->settings) && isset($this->settings['imageUrl'])) {
+                return $this->settings['imageUrl'];
+            }
+            return null;
+        }
+
+        // Generate the URL
+        $imageUrl = Storage::disk('public')->url($this->image_path);
+        
+        // If the URL is relative (starts with /storage), make it absolute
+        if (strpos($imageUrl, '/') === 0 && !filter_var($imageUrl, FILTER_VALIDATE_URL)) {
+            $baseUrl = rtrim(config('app.url'), '/');
+            $imageUrl = $baseUrl . $imageUrl;
+        }
+        
+        // Final check: if still not a valid URL, use url() helper
+        if (!filter_var($imageUrl, FILTER_VALIDATE_URL)) {
+            $imageUrl = url($imageUrl);
+        }
+
+        // Remove double slashes (except after http:// or https://)
+        $imageUrl = preg_replace('#([^:])//+#', '$1/', $imageUrl);
+
+        return $imageUrl;
     }
 
     public function company(): BelongsTo

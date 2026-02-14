@@ -476,29 +476,22 @@ class CallController extends Controller
      */
     public function twilioTwiML(Request $request)
     {
-        $callId = $request->input('call_id');
-        $call = Call::find($callId);
-
-        if (!$call) {
-            // Return error TwiML if call not found
-            $twiml = '<?xml version="1.0" encoding="UTF-8"?>';
-            $twiml .= '<Response>';
-            $twiml .= '<Say voice="alice">Call not found. Please try again.</Say>';
-            $twiml .= '<Hangup/>';
-            $twiml .= '</Response>';
-            
-            return response($twiml, 200)->header('Content-Type', 'text/xml');
-        }
-
-        // Get the customer's phone number to dial
-        $phoneNumber = $call->contact_phone;
+        // For direct calls, Twilio is already calling the customer (via 'to' parameter in initiateCall)
+        // When the customer answers, Twilio fetches this TwiML and executes it
+        // Since it's a direct call (no agent in between), we just return empty TwiML to connect
         
-        // If no contact_phone, try to get from customer relationship
-        if (!$phoneNumber && $call->customer) {
-            $phoneNumber = $call->customer->phone;
-        }
-
-        // Prepare message
+        // Simple TwiML that connects the call directly
+        // The customer has already answered, so we just need to connect
+        $twiml = '<?xml version="1.0" encoding="UTF-8"?>' . "\n" .
+                 '<Response>' . "\n" .
+                 '</Response>';
+        
+        Log::info('TwiML generated for direct call', [
+            'request_params' => $request->all(),
+        ]);
+        
+        return response($twiml, 200)
+            ->header('Content-Type', 'text/xml; charset=utf-8');
         $message = 'Connecting your call';
         if ($call->contact_name) {
             $message = 'Connecting you to ' . $call->contact_name;

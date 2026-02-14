@@ -12,16 +12,16 @@ return new class extends Migration
      */
     public function up(): void
     {
-        // First, convert old status values to new ones
+        // First, change the ENUM column to VARCHAR temporarily to allow any value
+        DB::statement("ALTER TABLE campaigns MODIFY COLUMN status VARCHAR(255)");
+
+        // Then, convert old status values to new ones
         DB::table('campaigns')->where('status', 'draft')->update(['status' => 'pending']);
         DB::table('campaigns')->where('status', 'scheduled')->update(['status' => 'pending']);
         DB::table('campaigns')->where('status', 'completed')->update(['status' => 'expired']);
         DB::table('campaigns')->where('status', 'cancelled')->update(['status' => 'rejected']);
 
-        // Change the ENUM column to VARCHAR temporarily
-        DB::statement("ALTER TABLE campaigns MODIFY COLUMN status VARCHAR(255)");
-
-        // Change it back to ENUM with new values and set default to 'pending'
+        // Finally, change it back to ENUM with new values and set default to 'pending'
         DB::statement("ALTER TABLE campaigns MODIFY COLUMN status ENUM('pending', 'active', 'paused', 'expired', 'rejected') DEFAULT 'pending'");
     }
 
@@ -30,15 +30,15 @@ return new class extends Migration
      */
     public function down(): void
     {
-        // Convert new status values back to old ones
+        // First, change the ENUM column to VARCHAR temporarily to allow any value
+        DB::statement("ALTER TABLE campaigns MODIFY COLUMN status VARCHAR(255)");
+
+        // Then, convert new status values back to old ones
         DB::table('campaigns')->where('status', 'pending')->update(['status' => 'draft']);
         DB::table('campaigns')->where('status', 'expired')->update(['status' => 'completed']);
         DB::table('campaigns')->where('status', 'rejected')->update(['status' => 'cancelled']);
 
-        // Change the ENUM column to VARCHAR temporarily
-        DB::statement("ALTER TABLE campaigns MODIFY COLUMN status VARCHAR(255)");
-
-        // Change it back to ENUM with old values
+        // Finally, change it back to ENUM with old values
         DB::statement("ALTER TABLE campaigns MODIFY COLUMN status ENUM('draft', 'scheduled', 'active', 'paused', 'completed', 'cancelled') DEFAULT 'draft'");
     }
 };

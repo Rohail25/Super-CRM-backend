@@ -57,6 +57,70 @@ class Call extends Model
         ];
     }
 
+    /**
+     * Ensure string fields are never null when serialized to JSON (for frontend compatibility)
+     * Frontend calls .toLowerCase() on these fields, so they must always be strings
+     */
+    public function toArray(): array
+    {
+        $array = parent::toArray();
+        
+        // Ensure all string fields are never null (return empty string instead)
+        $stringFields = ['source', 'priority', 'status', 'contact_name', 'contact_phone', 'notes', 'next_action', 'outcome'];
+        foreach ($stringFields as $field) {
+            if (!isset($array[$field])) {
+                // Set default values
+                if ($field === 'priority') {
+                    $array[$field] = 'medium';
+                } elseif ($field === 'status') {
+                    $array[$field] = 'scheduled';
+                } else {
+                    $array[$field] = '';
+                }
+            } elseif ($array[$field] === null) {
+                // Handle null values
+                if ($field === 'priority') {
+                    $array[$field] = 'medium';
+                } elseif ($field === 'status') {
+                    $array[$field] = 'scheduled';
+                } else {
+                    $array[$field] = '';
+                }
+            } elseif (!is_string($array[$field])) {
+                // Convert non-string values to strings
+                $array[$field] = (string) $array[$field];
+            }
+        }
+        
+        // Also normalize related models if they exist
+        if (isset($array['user']) && is_array($array['user'])) {
+            $array['user'] = $this->normalizeRelatedModel($array['user'], ['name', 'email', 'role']);
+        }
+        if (isset($array['customer']) && is_array($array['customer'])) {
+            $array['customer'] = $this->normalizeRelatedModel($array['customer'], ['first_name', 'last_name', 'email', 'phone']);
+        }
+        if (isset($array['opportunity']) && is_array($array['opportunity'])) {
+            $array['opportunity'] = $this->normalizeRelatedModel($array['opportunity'], ['name', 'stage', 'source', 'campaign', 'currency']);
+        }
+        
+        return $array;
+    }
+    
+    /**
+     * Normalize related model array to ensure string fields are never null
+     */
+    private function normalizeRelatedModel(array $model, array $stringFields): array
+    {
+        foreach ($stringFields as $field) {
+            if (!isset($model[$field]) || $model[$field] === null) {
+                $model[$field] = '';
+            } elseif (!is_string($model[$field])) {
+                $model[$field] = (string) $model[$field];
+            }
+        }
+        return $model;
+    }
+
     public function company(): BelongsTo
     {
         return $this->belongsTo(Company::class);

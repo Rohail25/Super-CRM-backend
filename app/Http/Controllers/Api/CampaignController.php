@@ -222,10 +222,19 @@ class CampaignController extends Controller
                 // Handle imageUrl - extract path from URL or save URL
                 $imageUrl = $request->imageUrl;
                 
+                // Normalize the URL by removing double slashes (except after http:// or https://)
+                $imageUrl = preg_replace('#([^:])//+#', '$1/', $imageUrl);
+                
                 // If it's a local storage URL, extract the path
                 if (strpos($imageUrl, '/storage/') !== false) {
-                    $path = str_replace(url('/storage/'), '', $imageUrl);
+                    // Extract path from URL - handle various URL formats
+                    $baseUrl = rtrim(config('app.url'), '/');
+                    $path = str_replace($baseUrl . '/storage/', '', $imageUrl);
+                    $path = str_replace('/storage/', '', $path);
                     $path = ltrim($path, '/');
+                    // Normalize path by removing double slashes
+                    $path = preg_replace('#/+#', '/', $path);
+                    
                     // Verify the file exists
                     if (Storage::disk('public')->exists($path)) {
                         $validated['image_path'] = $path;
@@ -497,10 +506,19 @@ class CampaignController extends Controller
             // Handle imageUrl - extract path from URL or save URL
             $imageUrl = $request->imageUrl;
             
+            // Normalize the URL by removing double slashes (except after http:// or https://)
+            $imageUrl = preg_replace('#([^:])//+#', '$1/', $imageUrl);
+            
             // If it's a local storage URL, extract the path
             if (strpos($imageUrl, '/storage/') !== false) {
-                $path = str_replace(url('/storage/'), '', $imageUrl);
+                // Extract path from URL - handle various URL formats
+                $baseUrl = rtrim(config('app.url'), '/');
+                $path = str_replace($baseUrl . '/storage/', '', $imageUrl);
+                $path = str_replace('/storage/', '', $path);
                 $path = ltrim($path, '/');
+                // Normalize path by removing double slashes
+                $path = preg_replace('#/+#', '/', $path);
+                
                 // Verify the file exists
                 if (Storage::disk('public')->exists($path)) {
                     // Delete old image if exists
