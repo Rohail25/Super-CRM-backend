@@ -165,6 +165,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::apiResource('calls', CallController::class);
     Route::post('/calls/{call}/complete', [CallController::class, 'complete']);
     Route::post('/calls/{call}/initiate', [CallController::class, 'initiateCall']);
+    Route::post('/calls/{call}/sms', [CallController::class, 'sendSMS']);
+    Route::post('/calls/{call}/whatsapp', [CallController::class, 'sendWhatsApp']);
 
     // Support Tickets
     Route::apiResource('support-tickets', SupportTicketController::class);

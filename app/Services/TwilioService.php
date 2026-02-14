@@ -216,9 +216,101 @@ class TwilioService
     }
 
     /**
+     * Send an SMS message.
+     */
+    public function sendSMS(string $to, string $message, ?array $mediaUrls = null): array
+    {
+        if (!$this->client) {
+            throw new \RuntimeException('Twilio is not configured.');
+        }
+
+        // Normalize phone number to E.164 format
+        $to = preg_replace('/[^0-9+]/', '', $to);
+        if (!str_starts_with($to, '+')) {
+            $to = '+' . $to;
+        }
+
+        try {
+            $params = [
+                'from' => $this->phoneNumber,
+                'body' => $message,
+            ];
+
+            // Add media URLs if provided (for MMS)
+            if (!empty($mediaUrls) && is_array($mediaUrls)) {
+                // Filter and validate media URLs - Twilio requires publicly accessible URLs
+                $validMediaUrls = [];
+                $invalidUrls = [];
+                
+                foreach ($mediaUrls as $url) {
+                    // Check if URL is localhost or not publicly accessible
+                    if (str_contains($url, 'localhost') || 
+                        str_contains($url, '127.0.0.1') || 
+                        str_contains($url, '::1') ||
+                        !filter_var($url, FILTER_VALIDATE_URL)) {
+                        $invalidUrls[] = $url;
+                        Log::warning('Skipping invalid media URL for SMS', [
+                            'url' => $url,
+                            'reason' => 'Not publicly accessible (localhost)',
+                        ]);
+                        continue;
+                    }
+                    
+                    // Ensure URL uses HTTPS (preferred) or HTTP
+                    if (!str_starts_with($url, 'http://') && !str_starts_with($url, 'https://')) {
+                        $invalidUrls[] = $url;
+                        Log::warning('Skipping invalid media URL for SMS', [
+                            'url' => $url,
+                            'reason' => 'Invalid protocol',
+                        ]);
+                        continue;
+                    }
+                    
+                    $validMediaUrls[] = $url;
+                }
+                
+                if (!empty($validMediaUrls)) {
+                    $params['mediaUrl'] = $validMediaUrls;
+                }
+                
+                // If there were invalid URLs but no valid ones, throw an error
+                if (!empty($invalidUrls) && empty($validMediaUrls)) {
+                    throw new \RuntimeException(
+                        'All media URLs are invalid. Twilio requires publicly accessible URLs (not localhost). ' .
+                        'Please use URLs from a live server or skip media attachments for local development.'
+                    );
+                }
+                
+                // Log if some URLs were filtered out
+                if (!empty($invalidUrls) && !empty($validMediaUrls)) {
+                    Log::info('Some media URLs were filtered out for SMS', [
+                        'valid_count' => count($validMediaUrls),
+                        'invalid_count' => count($invalidUrls),
+                        'invalid_urls' => $invalidUrls,
+                    ]);
+                }
+            }
+
+            $msg = $this->client->messages->create($to, $params);
+
+            return [
+                'success' => true,
+                'sid' => $msg->sid,
+                'status' => $msg->status,
+            ];
+        } catch (TwilioException $e) {
+            Log::error('Twilio SMS failed', [
+                'to' => $to,
+                'error' => $e->getMessage(),
+            ]);
+            throw new \RuntimeException('Failed to send SMS: ' . $e->getMessage());
+        }
+    }
+
+    /**
      * Send a WhatsApp message.
      */
-    public function sendWhatsAppMessage(string $to, string $message): array
+    public function sendWhatsAppMessage(string $to, string $message, ?array $mediaUrls = null): array
     {
         if (!$this->client) {
             throw new \RuntimeException('Twilio is not configured.');
@@ -229,13 +321,67 @@ class TwilioService
         $from = str_starts_with($this->whatsAppNumber, 'whatsapp:') ? $this->whatsAppNumber : 'whatsapp:' . $this->whatsAppNumber;
 
         try {
-            $msg = $this->client->messages->create(
-                $to,
-                [
-                    'from' => $from,
-                    'body' => $message,
-                ]
-            );
+            $params = [
+                'from' => $from,
+                'body' => $message,
+            ];
+
+            // Add media URLs if provided
+            if (!empty($mediaUrls) && is_array($mediaUrls)) {
+                // Filter and validate media URLs - Twilio requires publicly accessible URLs
+                $validMediaUrls = [];
+                $invalidUrls = [];
+                
+                foreach ($mediaUrls as $url) {
+                    // Check if URL is localhost or not publicly accessible
+                    if (str_contains($url, 'localhost') || 
+                        str_contains($url, '127.0.0.1') || 
+                        str_contains($url, '::1') ||
+                        !filter_var($url, FILTER_VALIDATE_URL)) {
+                        $invalidUrls[] = $url;
+                        Log::warning('Skipping invalid media URL for WhatsApp', [
+                            'url' => $url,
+                            'reason' => 'Not publicly accessible (localhost)',
+                        ]);
+                        continue;
+                    }
+                    
+                    // Ensure URL uses HTTPS (preferred) or HTTP
+                    if (!str_starts_with($url, 'http://') && !str_starts_with($url, 'https://')) {
+                        $invalidUrls[] = $url;
+                        Log::warning('Skipping invalid media URL for WhatsApp', [
+                            'url' => $url,
+                            'reason' => 'Invalid protocol',
+                        ]);
+                        continue;
+                    }
+                    
+                    $validMediaUrls[] = $url;
+                }
+                
+                if (!empty($validMediaUrls)) {
+                    $params['mediaUrl'] = $validMediaUrls;
+                }
+                
+                // If there were invalid URLs but no valid ones, throw an error
+                if (!empty($invalidUrls) && empty($validMediaUrls)) {
+                    throw new \RuntimeException(
+                        'All media URLs are invalid. Twilio requires publicly accessible URLs (not localhost). ' .
+                        'Please use URLs from a live server or skip media attachments for local development.'
+                    );
+                }
+                
+                // Log if some URLs were filtered out
+                if (!empty($invalidUrls) && !empty($validMediaUrls)) {
+                    Log::info('Some media URLs were filtered out for WhatsApp', [
+                        'valid_count' => count($validMediaUrls),
+                        'invalid_count' => count($invalidUrls),
+                        'invalid_urls' => $invalidUrls,
+                    ]);
+                }
+            }
+
+            $msg = $this->client->messages->create($to, $params);
 
             return [
                 'success' => true,

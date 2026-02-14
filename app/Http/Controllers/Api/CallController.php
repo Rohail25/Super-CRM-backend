@@ -368,13 +368,19 @@ class CallController extends Controller
 
     /**
      * Initiate a phone call using Twilio.
+     * Only super_admin can initiate calls.
      */
     public function initiateCall(Request $request, Call $call)
     {
         $user = $request->user();
 
+        // Restrict to super_admin only
+        if (!$user->isSuperAdmin()) {
+            return response()->json(['message' => 'Only super administrators can initiate calls'], 403);
+        }
+
         // Check access
-        if (!$user->isSuperAdmin() && $call->company_id !== $user->company_id) {
+        if ($call->company_id !== $user->company_id) {
             return response()->json(['message' => 'Access denied'], 403);
         }
 
@@ -399,6 +405,172 @@ class CallController extends Controller
         } catch (\Exception $e) {
             return $this->errorResponse(
                 'Failed to initiate call',
+                $e,
+                500,
+                ['call_id' => $call->id]
+            );
+        }
+    }
+
+    /**
+     * Send SMS message for a call.
+     * Only super_admin can send SMS.
+     */
+    public function sendSMS(Request $request, Call $call)
+    {
+        $user = $request->user();
+
+        // Restrict to super_admin only
+        if (!$user->isSuperAdmin()) {
+            return response()->json(['message' => 'Only super administrators can send SMS'], 403);
+        }
+
+        // Check access
+        if ($call->company_id !== $user->company_id) {
+            return response()->json(['message' => 'Access denied'], 403);
+        }
+
+        $validated = $request->validate([
+            'message' => 'required|string|max:1600',
+            'media_urls' => 'nullable|array',
+            'media_urls.*' => 'url',
+        ]);
+
+        $phoneNumber = $request->input('phone_number') ?? $call->contact_phone;
+        if (!$phoneNumber) {
+            return response()->json([
+                'message' => 'Phone number is required',
+            ], 400);
+        }
+
+        try {
+            // Check for localhost URLs in media_urls and provide warning
+            $hasLocalhostUrls = false;
+            if (!empty($validated['media_urls'])) {
+                foreach ($validated['media_urls'] as $url) {
+                    if (str_contains($url, 'localhost') || str_contains($url, '127.0.0.1')) {
+                        $hasLocalhostUrls = true;
+                        break;
+                    }
+                }
+            }
+            
+            $twilioService = app(\App\Services\TwilioService::class);
+            $result = $twilioService->sendSMS(
+                $phoneNumber,
+                $validated['message'],
+                $validated['media_urls'] ?? null
+            );
+
+            // Log SMS in call notes
+            $call->update([
+                'notes' => ($call->notes ?? '') . "\nSMS sent: " . now()->format('Y-m-d H:i:s') . " - " . substr($validated['message'], 0, 100),
+            ]);
+
+            $message = 'SMS sent successfully';
+            if ($hasLocalhostUrls) {
+                $message .= ' (Note: Localhost media URLs were skipped - Twilio requires publicly accessible URLs)';
+            }
+
+            return response()->json([
+                'message' => $message,
+                'sid' => $result['sid'],
+                'status' => $result['status'],
+                'call' => $call->fresh()->load(['user', 'customer', 'opportunity']),
+            ]);
+        } catch (\Exception $e) {
+            // Provide more helpful error message for localhost URLs
+            $errorMessage = $e->getMessage();
+            if (str_contains($errorMessage, 'localhost') || str_contains($errorMessage, 'Invalid media URL')) {
+                $errorMessage = 'Cannot send SMS with media: Twilio requires publicly accessible URLs (not localhost). ' .
+                    'For local development, please send SMS without media attachments, or use URLs from a live server.';
+            }
+            
+            return $this->errorResponse(
+                $errorMessage,
+                $e,
+                500,
+                ['call_id' => $call->id]
+            );
+        }
+    }
+
+    /**
+     * Send WhatsApp message for a call.
+     * Only super_admin can send WhatsApp messages.
+     */
+    public function sendWhatsApp(Request $request, Call $call)
+    {
+        $user = $request->user();
+
+        // Restrict to super_admin only
+        if (!$user->isSuperAdmin()) {
+            return response()->json(['message' => 'Only super administrators can send WhatsApp messages'], 403);
+        }
+
+        // Check access
+        if ($call->company_id !== $user->company_id) {
+            return response()->json(['message' => 'Access denied'], 403);
+        }
+
+        $validated = $request->validate([
+            'message' => 'required|string|max:1600',
+            'media_urls' => 'nullable|array',
+            'media_urls.*' => 'url',
+        ]);
+
+        $phoneNumber = $request->input('phone_number') ?? $call->contact_phone;
+        if (!$phoneNumber) {
+            return response()->json([
+                'message' => 'Phone number is required',
+            ], 400);
+        }
+
+        try {
+            // Check for localhost URLs in media_urls and provide warning
+            $hasLocalhostUrls = false;
+            if (!empty($validated['media_urls'])) {
+                foreach ($validated['media_urls'] as $url) {
+                    if (str_contains($url, 'localhost') || str_contains($url, '127.0.0.1')) {
+                        $hasLocalhostUrls = true;
+                        break;
+                    }
+                }
+            }
+            
+            $twilioService = app(\App\Services\TwilioService::class);
+            $result = $twilioService->sendWhatsAppMessage(
+                $phoneNumber,
+                $validated['message'],
+                $validated['media_urls'] ?? null
+            );
+
+            // Log WhatsApp in call notes
+            $call->update([
+                'notes' => ($call->notes ?? '') . "\nWhatsApp sent: " . now()->format('Y-m-d H:i:s') . " - " . substr($validated['message'], 0, 100),
+            ]);
+
+            $message = 'WhatsApp message sent successfully';
+            if ($hasLocalhostUrls) {
+                $message .= ' (Note: Localhost media URLs were skipped - Twilio requires publicly accessible URLs)';
+            }
+
+            return response()->json([
+                'message' => $message,
+                'sid' => $result['sid'],
+                'status' => $result['status'],
+                'call' => $call->fresh()->load(['user', 'customer', 'opportunity']),
+            ]);
+        } catch (\Exception $e) {
+            // Provide more helpful error message for localhost URLs
+            $errorMessage = $e->getMessage();
+            if (str_contains($errorMessage, 'localhost') || str_contains($errorMessage, 'Invalid media URL')) {
+                $errorMessage = 'Cannot send WhatsApp with media: Twilio requires publicly accessible URLs (not localhost). ' .
+                    'For local development, please send WhatsApp without media attachments, or use URLs from a live server.';
+            }
+            
+            return $this->errorResponse(
+                $errorMessage,
                 $e,
                 500,
                 ['call_id' => $call->id]
