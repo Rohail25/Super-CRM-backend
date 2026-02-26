@@ -9,8 +9,10 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Storage;
 
 class SendBulkEmailJob implements ShouldQueue
 {
@@ -22,7 +24,9 @@ class SendBulkEmailJob implements ShouldQueue
     public function __construct(
         public int $emailId,
         public string $subject,
-        public string $message
+        public string $message,
+        public array $attachments = [],
+        public ?string $batchId = null
     ) {}
 
     /**
@@ -55,7 +59,7 @@ class SendBulkEmailJob implements ShouldQueue
         try {
             // Send email using Laravel Mailable
             Mail::to($emailAddress)->send(
-                new BulkEmailMail($this->subject, $this->message)
+                new BulkEmailMail($this->subject, $this->message, $this->attachments)
             );
 
             // Update status to sent
@@ -85,6 +89,27 @@ class SendBulkEmailJob implements ShouldQueue
 
             // Re-throw to mark job as failed
             throw $e;
+        } finally {
+            $this->cleanupBatch();
+        }
+    }
+
+    private function cleanupBatch(): void
+    {
+        if (!$this->batchId) {
+            return;
+        }
+
+        $cacheKey = 'bulk_email:' . $this->batchId . ':pending';
+        $remaining = Cache::has($cacheKey) ? Cache::decrement($cacheKey) : null;
+
+        if ($remaining !== null && $remaining <= 0) {
+            foreach ($this->attachments as $attachment) {
+                if (!empty($attachment['path'])) {
+                    Storage::disk('local')->delete($attachment['path']);
+                }
+            }
+            Cache::forget($cacheKey);
         }
     }
 }

@@ -4,6 +4,7 @@ namespace App\Mail;
 
 use Illuminate\Bus\Queueable;
 use Illuminate\Mail\Mailable;
+use Illuminate\Mail\Mailables\Attachment;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
@@ -23,12 +24,18 @@ class BulkEmailMail extends Mailable
     private string $emailMessage;
 
     /**
+     * Attachment metadata
+     */
+    private array $attachments;
+
+    /**
      * Create a new message instance.
      */
-    public function __construct(string $subject, string $message)
+    public function __construct(string $subject, string $message, array $attachments = [])
     {
         $this->emailSubject = $subject;
         $this->emailMessage = $message;
+        $this->attachments = $attachments;
     }
 
     /**
@@ -49,5 +56,30 @@ class BulkEmailMail extends Mailable
         return new Content(
             htmlString: nl2br(e($this->emailMessage)),
         );
+    }
+
+    public function attachments(): array
+    {
+        $mailAttachments = [];
+
+        foreach ($this->attachments as $attachment) {
+            if (empty($attachment['path'])) {
+                continue;
+            }
+
+            $item = Attachment::fromStorageDisk('local', $attachment['path']);
+
+            if (!empty($attachment['name'])) {
+                $item = $item->as($attachment['name']);
+            }
+
+            if (!empty($attachment['mime'])) {
+                $item = $item->withMime($attachment['mime']);
+            }
+
+            $mailAttachments[] = $item;
+        }
+
+        return $mailAttachments;
     }
 }

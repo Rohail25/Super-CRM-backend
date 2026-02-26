@@ -22,13 +22,19 @@ class CommunicationController extends Controller
     {
         $validated = $request->validate([
             'to' => 'required|string',
-            'message' => 'required|string',
+            'message' => 'required_without:template_sid|nullable|string',
+            'template_sid' => 'required_without:message|nullable|string',
+            'template_variables' => 'nullable|array',
+            'media_urls' => 'nullable|array',
         ]);
 
         try {
             $result = $this->twilioService->sendWhatsAppMessage(
                 $validated['to'],
-                $validated['message']
+                $validated['message'] ?? '',
+                $validated['media_urls'] ?? null,
+                $validated['template_sid'] ?? null,
+                $validated['template_variables'] ?? null
             );
 
             return response()->json([

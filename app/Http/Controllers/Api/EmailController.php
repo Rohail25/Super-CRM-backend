@@ -7,6 +7,8 @@ use App\Http\Controllers\Api\Traits\HandlesApiErrors;
 use App\Models\Email;
 use App\Jobs\SendBulkEmailJob;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 use PhpOffice\PhpSpreadsheet\IOFactory;
@@ -529,9 +531,28 @@ class EmailController extends Controller
             'selected_ids' => 'required_if:selection_type,selected|array',
             'selected_ids.*' => 'integer|exists:emails,id',
             'category_filter' => 'required_if:selection_type,category|string',
+            'attachments' => 'nullable|array',
+            'attachments.*' => 'file|max:102400|mimes:pdf,xls,xlsx,doc,docx,jpg,jpeg,png',
         ]);
 
         try {
+            $attachments = [];
+            $batchId = null;
+
+            if ($request->hasFile('attachments')) {
+                $batchId = (string) Str::uuid();
+                $attachmentsDir = 'bulk-email/' . $batchId;
+
+                foreach ($request->file('attachments') as $attachment) {
+                    $path = $attachment->store($attachmentsDir, 'local');
+                    $attachments[] = [
+                        'path' => $path,
+                        'name' => $attachment->getClientOriginalName(),
+                        'mime' => $attachment->getClientMimeType(),
+                    ];
+                }
+            }
+
             // Build query based on selection type
             $query = Email::query();
 
@@ -565,13 +586,23 @@ class EmailController extends Controller
             $sentCount = 0;
             $failedCount = 0;
 
+            if ($batchId) {
+                Cache::put(
+                    'bulk_email:' . $batchId . ':pending',
+                    $emails->count(),
+                    now()->addHours(6)
+                );
+            }
+
             // Dispatch job for each email (or batch them)
             foreach ($emails as $email) {
                 try {
                     SendBulkEmailJob::dispatch(
                         $email->id,
                         $validated['subject'],
-                        $validated['message']
+                        $validated['message'],
+                        $attachments,
+                        $batchId
                     );
                     $sentCount++;
                 } catch (\Exception $e) {

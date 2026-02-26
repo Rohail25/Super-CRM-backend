@@ -310,7 +310,13 @@ class TwilioService
     /**
      * Send a WhatsApp message.
      */
-    public function sendWhatsAppMessage(string $to, string $message, ?array $mediaUrls = null): array
+    public function sendWhatsAppMessage(
+        string $to,
+        string $message,
+        ?array $mediaUrls = null,
+        ?string $templateSid = null,
+        ?array $templateVariables = null
+    ): array
     {
         if (!$this->client) {
             throw new \RuntimeException('Twilio is not configured.');
@@ -323,8 +329,17 @@ class TwilioService
         try {
             $params = [
                 'from' => $from,
-                'body' => $message,
             ];
+
+            if (!empty($templateSid)) {
+                $params['contentSid'] = $templateSid;
+
+                if (!empty($templateVariables)) {
+                    $params['contentVariables'] = json_encode($templateVariables, JSON_UNESCAPED_SLASHES);
+                }
+            } else {
+                $params['body'] = $message;
+            }
 
             // Add media URLs if provided
             if (!empty($mediaUrls) && is_array($mediaUrls)) {
