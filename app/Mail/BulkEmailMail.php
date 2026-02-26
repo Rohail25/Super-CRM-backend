@@ -28,7 +28,7 @@ class BulkEmailMail extends Mailable
     /**
      * Attachment metadata
      */
-    private array $attachments;
+    private array $attachmentMeta;
 
     /**
      * Create a new message instance.
@@ -37,7 +37,7 @@ class BulkEmailMail extends Mailable
     {
         $this->emailSubject = $subject;
         $this->emailMessage = $message;
-        $this->attachments = $attachments;
+        $this->attachmentMeta = $attachments;
     }
 
     /**
@@ -64,7 +64,7 @@ class BulkEmailMail extends Mailable
     {
         $mailAttachments = [];
 
-        foreach ($this->attachments as $attachment) {
+        foreach ($this->attachmentMeta as $attachment) {
             if (empty($attachment['path'])) {
                 continue;
             }
