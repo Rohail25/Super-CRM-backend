@@ -8,6 +8,8 @@ use Illuminate\Mail\Mailables\Attachment;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 
 class BulkEmailMail extends Mailable
 {
@@ -67,7 +69,15 @@ class BulkEmailMail extends Mailable
                 continue;
             }
 
-            $item = Attachment::fromStorageDisk('local', $attachment['path']);
+            $absolutePath = Storage::disk('local')->path($attachment['path']);
+            if (!is_file($absolutePath)) {
+                Log::warning('Bulk email attachment missing', [
+                    'path' => $attachment['path'],
+                ]);
+                continue;
+            }
+
+            $item = Attachment::fromPath($absolutePath);
 
             if (!empty($attachment['name'])) {
                 $item = $item->as($attachment['name']);

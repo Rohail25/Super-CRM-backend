@@ -57,6 +57,15 @@ class SendBulkEmailJob implements ShouldQueue
         }
 
         try {
+            Log::info('Bulk email attachments', [
+                'email_id' => $this->emailId,
+                'count' => count($this->attachments),
+                'paths' => array_values(array_filter(array_map(
+                    fn ($item) => $item['path'] ?? null,
+                    $this->attachments
+                ))),
+            ]);
+
             // Send email using Laravel Mailable
             Mail::to($emailAddress)->send(
                 new BulkEmailMail($this->subject, $this->message, $this->attachments)
